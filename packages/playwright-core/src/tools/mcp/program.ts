@@ -14,21 +14,21 @@
  * limitations under the License.
  */
 
-import { ProgramOption } from '../../utilsBundle';
-
+import { Option as ProgramOption } from 'commander';
 import * as mcpServer from '../utils/mcp/server';
-import { commaSeparatedList, dotenvFileLoader, enumParser, headerParser, numberParser, resolutionParser, resolveCLIConfig, semicolonSeparatedList } from './config';
+import { commaSeparatedList, dotenvFileLoader, enumParser, headerParser, numberParser, resolutionParser, resolveCLIConfigForMCP, semicolonSeparatedList } from './config';
 import { setupExitWatchdog } from './watchdog';
-import { createBrowser } from './browserFactory';
+import { createBrowser, createBrowserWithInfo } from './browserFactory';
 import { BrowserBackend } from '../backend/browserBackend';
 import { filteredTools } from '../backend/tools';
 import { testDebug } from './log';
+import { packageJSON } from '../../package';
 
 import type { Command } from '../../utilsBundle';
 import type { ClientInfo } from '../utils/mcp/server';
 import type * as playwright from '../../..';
 
-const version = require('../../../package.json').version;
+const version = packageJSON.version;
 
 export function decorateMCPCommand(command: Command) {
   command
@@ -48,6 +48,7 @@ export function decorateMCPCommand(command: Command) {
       .option('--device <device>', 'device to emulate, for example: "iPhone 15"')
       .option('--executable-path <path>', 'path to the browser executable.')
       .option('--extension', 'Connect to a running browser instance (Edge/Chrome only). Requires the "Playwright MCP Bridge" browser extension to be installed.')
+      .option('--endpoint <endpoint>', 'Bound browser endpoint to connect to.')
       .option('--grant-permissions <permissions...>', 'List of permissions to grant to the browser context, for example "geolocation", "clipboard-read", "clipboard-write".', commaSeparatedList)
       .option('--headless', 'run browser in headless mode, headed by default')
       .option('--host <host>', 'host to bind server to. Default is localhost. Use 0.0.0.0 to bind to all interfaces.')
@@ -66,7 +67,7 @@ export function decorateMCPCommand(command: Command) {
       .option('--save-session', 'Whether to save the Playwright MCP session into the output directory.')
       .option('--secrets <path>', 'path to a file containing secrets in the dotenv format', dotenvFileLoader)
       .option('--shared-browser-context', 'reuse the same browser context between all connected HTTP clients.')
-      .option('--snapshot-mode <mode>', 'when taking snapshots for responses, specifies the mode to use. Can be "incremental", "full", or "none". Default is incremental.')
+      .option('--snapshot-mode <mode>', 'when taking snapshots for responses, specifies the mode to use. Can be "full" or "none". Default is "full".')
       .option('--storage-state <path>', 'path to the storage state file for isolated sessions.')
       .option('--test-id-attribute <attribute>', 'specify the attribute to use for test ids, defaults to "data-testid"')
       .option('--timeout-action <timeout>', 'specify action timeout in milliseconds, defaults to 5000ms', numberParser)
@@ -91,7 +92,7 @@ export function decorateMCPCommand(command: Command) {
         if (options.caps?.includes('tracing'))
           options.caps.push('devtools');
 
-        const config = await resolveCLIConfig(options);
+        const config = await resolveCLIConfigForMCP(options);
         const tools = filteredTools(config);
         if (config.extension) {
           const serverBackendFactory: mcpServer.ServerBackendFactory = {
@@ -113,6 +114,7 @@ export function decorateMCPCommand(command: Command) {
         const useSharedBrowser = config.sharedBrowserContext || config.browser.isolated;
         let sharedBrowser: playwright.Browser | undefined;
         let clientCount = 0;
+        const clientNameCounters = new Map<string, number>();
 
         const factory: mcpServer.ServerBackendFactory = {
           name: 'Playwright',
@@ -120,10 +122,20 @@ export function decorateMCPCommand(command: Command) {
           version,
           toolSchemas: tools.map(tool => tool.schema),
           create: async (clientInfo: ClientInfo) => {
-            if (useSharedBrowser && clientCount === 0)
-              sharedBrowser = await createBrowser(config, clientInfo);
+            if (useSharedBrowser && clientCount === 0) {
+              const { browser, canBind } = await createBrowserWithInfo(config, clientInfo);
+              sharedBrowser = browser;
+              if (canBind)
+                await browser.bind(clientInfo.clientName, { workspaceDir: clientInfo.cwd });
+            }
             clientCount++;
-            const browser = sharedBrowser || await createBrowser(config, clientInfo);
+            const { browser, canBind } = sharedBrowser ? { browser: sharedBrowser, canBind: false } : await createBrowserWithInfo(config, clientInfo);
+            if (canBind) {
+              const count = (clientNameCounters.get(clientInfo.clientName) ?? 0) + 1;
+              clientNameCounters.set(clientInfo.clientName, count);
+              const sessionName = count > 1 ? `${clientInfo.clientName} (${count})` : clientInfo.clientName;
+              await browser.bind(sessionName, { workspaceDir: clientInfo.cwd });
+            }
             const browserContext = config.browser.isolated ? await browser.newContext(config.browser.contextOptions) : browser.contexts()[0];
             return new BrowserBackend(config, browserContext, tools);
           },
@@ -140,21 +152,5 @@ export function decorateMCPCommand(command: Command) {
           }
         };
         await mcpServer.start(factory, config.server);
-      });
-}
-
-export function decorateMCPInstallBrowserCommand(command: Command) {
-  command
-      .description('ensure browsers necessary for this version of Playwright are installed')
-      .option('--with-deps', 'install system dependencies for browsers')
-      .option('--dry-run', 'do not execute installation, only print information')
-      .option('--list', 'prints list of browsers from all playwright installations')
-      .option('--force', 'force reinstall of already installed browsers')
-      .option('--only-shell', 'only install headless shell when installing chromium')
-      .option('--no-shell', 'do not install chromium headless shell')
-      .action(async options => {
-        const argv = process.argv.map(arg => arg === 'install-browser' ? 'install' : arg);
-        const { program: mainProgram } = await import('../../cli/program');
-        mainProgram.parse(argv);
       });
 }

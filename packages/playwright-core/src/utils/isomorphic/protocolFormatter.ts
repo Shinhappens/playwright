@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { methodMetainfo } from './protocolMetainfo';
+import { getMetainfo } from './protocolMetainfo';
 
 export function formatProtocolParam(params: Record<string, string> | undefined, alternatives: string): string | undefined {
   return _formatProtocolParam(params, alternatives)?.replaceAll('\n', '\\n');
@@ -30,7 +30,7 @@ function _formatProtocolParam(params: Record<string, string> | undefined, altern
         const urlObject = new URL(params[name]);
         if (urlObject.protocol === 'data:')
           return urlObject.protocol;
-        if (urlObject.protocol === 'about:')
+        if (['about:', 'chrome:', 'edge:'].includes(urlObject.protocol))
           return params[name];
         return urlObject.pathname + urlObject.search;
       } catch (error) {
@@ -63,7 +63,7 @@ function deepParam(params: Record<string, any>, name: string): string | undefine
 }
 
 export function renderTitleForCall(metadata: { title?: string, type: string, method: string, params: Record<string, string> | undefined }) {
-  const titleFormat = metadata.title ?? methodMetainfo.get(metadata.type + '.' + metadata.method)?.title ?? metadata.method;
+  const titleFormat = metadata.title ?? getMetainfo(metadata)?.title ?? metadata.method;
   return titleFormat.replace(/\{([^}]+)\}/g, (fullMatch, p1) => {
     return formatProtocolParam(metadata.params, p1) ?? fullMatch;
   });
@@ -72,5 +72,5 @@ export function renderTitleForCall(metadata: { title?: string, type: string, met
 export type ActionGroup = 'configuration' | 'route' | 'getter';
 
 export function getActionGroup(metadata: { type: string, method: string }) {
-  return methodMetainfo.get(metadata.type + '.' + metadata.method)?.group as undefined | ActionGroup;
+  return getMetainfo(metadata)?.group as undefined | ActionGroup;
 }

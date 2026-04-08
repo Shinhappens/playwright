@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { z } from '../../mcpBundle';
+import * as z from 'zod';
 import { defineTool } from './tool';
 
 
@@ -43,6 +43,7 @@ const tracingStart = defineTool({
     response.addFileLink('Action log', `${tracesDir}/${name}.trace`);
     response.addFileLink('Network log', `${tracesDir}/${name}.network`);
     response.addFileLink('Resources', `${tracesDir}/resources`);
+    // eslint-disable-next-line no-restricted-syntax
     (browserContext.tracing as any)[traceLegendSymbol] = { tracesDir, name };
   },
 });
@@ -61,7 +62,13 @@ const tracingStop = defineTool({
   handle: async (context, params, response) => {
     const browserContext = await context.ensureBrowserContext();
     await browserContext.tracing.stop();
+    // eslint-disable-next-line no-restricted-syntax
     const traceLegend = (browserContext.tracing as any)[traceLegendSymbol];
+    if (!traceLegend)
+      throw new Error('Tracing is not started');
+    // eslint-disable-next-line no-restricted-syntax
+    delete (browserContext.tracing as any)[traceLegendSymbol];
+
     response.addTextResult(`Trace recording stopped.`);
     response.addFileLink('Trace', `${traceLegend.tracesDir}/${traceLegend.name}.trace`);
     response.addFileLink('Network log', `${traceLegend.tracesDir}/${traceLegend.name}.network`);

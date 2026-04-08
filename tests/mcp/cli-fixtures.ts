@@ -21,6 +21,7 @@ import { chromium } from 'playwright-core';
 
 import { test as baseTest } from './fixtures';
 import { killProcessGroup } from '../config/commonFixtures';
+import { inheritAndCleanEnv } from '../config/utils';
 
 import type { Page } from 'playwright-core';
 import type { CommonFixtures } from '../config/commonFixtures';
@@ -28,11 +29,12 @@ import type { CommonFixtures } from '../config/commonFixtures';
 export { expect } from './fixtures';
 export const test = baseTest.extend<{
   cliEnv: Record<string, string>,
-  openDashboard: () => Promise<Page>,
+  openDashboard: (options?: { cwd?: string }) => Promise<Page>,
   cli: (...args: any[]) => Promise<{
     output: string,
     error: string,
     exitCode: number | undefined,
+    inlineSnapshot?: string,
     snapshot?: string,
     attachments?: { name: string, data: Buffer | null }[],
     pid?: number,
@@ -43,9 +45,9 @@ export const test = baseTest.extend<{
   },
   openDashboard: async ({ cli, waitForPort, findFreePort }, use) => {
     const dashboards = [];
-    await use(async () => {
+    await use(async (options?: { cwd?: string }) => {
       const debugPort = await findFreePort();
-      await cli('show', { env: { PLAYWRIGHT_DASHBOARD_DEBUG_PORT: String(debugPort) } });
+      await cli('show', { cwd: options?.cwd, env: { PLAYWRIGHT_DASHBOARD_DEBUG_PORT: String(debugPort) } });
       await waitForPort(debugPort);
       const browser = await chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`);
       const dashboard = browser.contexts()[0].pages()[0];
@@ -53,11 +55,13 @@ export const test = baseTest.extend<{
       return dashboard;
     });
     for (const { dashboard, browser } of dashboards) {
+      if (!browser.isConnected())
+        continue;
       await Promise.all([
         // Closing the page should close the browser.
         new Promise(r => browser.on('disconnected', r)),
         dashboard.close()
-      ]);
+      ]).catch(e => console.error('Error during dashboard close', e));
     }
   },
   cli: async ({ mcpBrowser, mcpHeadless, childProcess }, use) => {
@@ -89,7 +93,7 @@ function cliEnv() {
   return {
     PLAYWRIGHT_SERVER_REGISTRY: test.info().outputPath('registry'),
     PLAYWRIGHT_DAEMON_SESSION_DIR: test.info().outputPath('daemon'),
-    PLAYWRIGHT_DAEMON_SOCKETS_DIR: path.join(test.info().project.outputDir, 'ds'),
+    PLAYWRIGHT_SOCKETS_DIR: path.join(test.info().project.outputDir, 'ds', String(test.info().parallelIndex)),
   };
 }
 
@@ -100,22 +104,21 @@ async function runCli(childProcess: CommonFixtures['childProcess'], args: string
     const cli = childProcess({
       command: [process.execPath, require.resolve('../../packages/playwright-core/lib/tools/cli-client/cli.js'), ...args],
       cwd: cliOptions.cwd ?? testInfo.outputPath(),
-      env: {
-        ...process.env,
-        ...cliOptions.env,
+      env: inheritAndCleanEnv({
         ...cliEnv(),
         PLAYWRIGHT_MCP_BROWSER: options.mcpBrowser,
         PLAYWRIGHT_MCP_HEADLESS: String(options.mcpHeadless),
         ...cliOptions.env,
-      },
+      }),
     });
     await cli.exited.finally(async () => {
       await testInfo.attach(stepTitle, { body: cli.output, contentType: 'text/plain' });
     });
 
     let snapshot: string | undefined;
+    let inlineSnapshot: string | undefined;
     if (cli.stdout.includes('### Snapshot'))
-      snapshot = await loadSnapshot(cli.stdout);
+      ({ snapshot, inlineSnapshot } = await loadSnapshot(cli.stdout));
     const attachments = loadAttachments(cli.stdout);
 
     const matches = cli.stdout.includes('### Browser') ? cli.stdout.match(/Browser `(.+)` opened with pid (\d+)\./) : undefined;
@@ -127,6 +130,7 @@ async function runCli(childProcess: CommonFixtures['childProcess'], args: string
       output: cli.stdout.trim(),
       error: cli.stderr.trim(),
       snapshot,
+      inlineSnapshot,
       attachments,
       pid: pid ? +pid : undefined,
     };
@@ -150,16 +154,19 @@ function loadAttachments(output: string) {
   });
 }
 
-async function loadSnapshot(output: string) {
+async function loadSnapshot(output: string): Promise<{ snapshot?: string, inlineSnapshot?: string }> {
   const lines = output.split('\n');
   if (!lines.includes('### Snapshot'))
     throw new Error('Snapshot file not found');
-  const fileLine = lines[lines.indexOf('### Snapshot') + 1];
+  const snapshotIndex = lines.indexOf('### Snapshot') + 1;
+  const fileLine = lines[snapshotIndex];
+  if (fileLine.startsWith('```yaml'))
+    return { inlineSnapshot: lines.slice(snapshotIndex + 1, lines.indexOf('```', snapshotIndex)).join('\n') };
   const fileName = fileLine.match(/- \[(.+)\]\((.+)\)/)![2];
   try {
-    return await fs.promises.readFile(test.info().outputPath(fileName), 'utf8').catch(() => undefined);
+    return { snapshot: await fs.promises.readFile(test.info().outputPath(fileName), 'utf8').catch(() => undefined) };
   } catch (e) {
-    return '';
+    return {};
   }
 }
 

@@ -18,8 +18,10 @@ import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
 
-import { monotonicTime, removeFolders } from 'playwright-core/lib/utils';
-import { debug } from 'playwright-core/lib/utilsBundle';
+import debug from 'debug';
+import { ManualPromise } from '@isomorphic/manualPromise';
+import { monotonicTime } from '@isomorphic/time';
+import { removeFolders } from '@utils/fileUtils';
 
 import { Dispatcher  } from './dispatcher';
 import { FailureTracker } from './failureTracker';
@@ -31,7 +33,8 @@ import { detectChangedTestFiles } from './vcs';
 import { Suite } from '../common/test';
 import { createTestGroups } from '../runner/testGroups';
 import { cacheDir } from '../transform/compilationCache';
-import { removeDirAndLogToConsole } from '../util';
+import { createTitleMatcher, forceRegExp, removeDirAndLogToConsole } from '../util';
+import { createFiltersFromArguments } from '../common/suiteUtils';
 
 import type { TestGroup } from '../runner/testGroups';
 import type { EnvByProjectId } from './dispatcher';
@@ -40,7 +43,6 @@ import type { Task } from './taskRunner';
 import type { FullResult } from '../../types/testReporter';
 import type { FullConfigInternal, FullProjectInternal } from '../common/config';
 import type { InternalReporter } from '../reporters/internalReporter';
-import type { ManualPromise } from 'playwright-core/lib/utils';
 
 const readDirAsync = promisify(fs.readdir);
 
@@ -258,6 +260,36 @@ export function createLoadTask(mode: 'out-of-process' | 'in-process', options: {
   return {
     title: 'load tests',
     setup: async (testRun, errors, softErrors) => {
+      if (testRun.config.cliArgs.length) {
+        const { testFilter, fileFilter } = createFiltersFromArguments(testRun.config.cliArgs);
+        testRun.config.loadFileFilters.push(fileFilter);
+        testRun.config.preOnlyTestFilters.push(testFilter);
+      }
+
+      if (testRun.config.cliTestList) {
+        const { testFilter, fileFilter } = await loadTestList(testRun.config, testRun.config.cliTestList);
+        testRun.config.preOnlyTestFilters.push(testFilter);
+        testRun.config.loadFileFilters.push(fileFilter);
+      }
+
+      if (testRun.config.cliTestListInvert) {
+        // Note: invert list does not mean we can filter files. For example, the following invert list
+        // can still run tests from foo.spec.ts:
+        //
+        // foo.spec.ts > some test
+        const { testFilter } = await loadTestList(testRun.config, testRun.config.cliTestListInvert);
+        testRun.config.preOnlyTestFilters.push(test => !testFilter(test));
+      }
+
+      if (testRun.config.cliGrep || testRun.config.cliGrepInvert) {
+        const grepMatcher = testRun.config.cliGrep ? createTitleMatcher(forceRegExp(testRun.config.cliGrep)) : () => true;
+        const grepInvertMatcher = testRun.config.cliGrepInvert ? createTitleMatcher(forceRegExp(testRun.config.cliGrepInvert)) : () => false;
+        testRun.config.preOnlyTestFilters.push(test => {
+          const grepTitle = test._grepTitleWithTags();
+          return !grepInvertMatcher(grepTitle) && grepMatcher(grepTitle);
+        });
+      }
+
       await collectProjectsAndTestFiles(testRun, !!options.doNotRunDepsOutsideProjectFilter);
       await loadFileSuites(testRun, mode, options.failOnLoadErrors ? errors : softErrors);
 
@@ -269,16 +301,6 @@ export function createLoadTask(mode: 'out-of-process' | 'in-process', options: {
       if (testRun.config.cliOnlyChanged) {
         const changedFiles = await detectChangedTestFiles(testRun.config.cliOnlyChanged, testRun.config.configDir);
         testRun.config.preOnlyTestFilters.push(test => changedFiles.has(test.location.file));
-      }
-
-      if (testRun.config.cliTestList) {
-        const testListFilter = await loadTestList(testRun.config, testRun.config.cliTestList);
-        testRun.config.preOnlyTestFilters.push(testListFilter);
-      }
-
-      if (testRun.config.cliTestListInvert) {
-        const testListInvertFilter = await loadTestList(testRun.config, testRun.config.cliTestListInvert);
-        testRun.config.preOnlyTestFilters.push(test => !testListInvertFilter(test));
       }
 
       const { rootSuite, topLevelProjects } = await createRootSuite(testRun, options.failOnLoadErrors ? errors : softErrors, !!options.filterOnly);
@@ -416,29 +438,6 @@ function createRunTestsTask(): Task<TestRun> {
     teardown: async ({ phases }) => {
       for (const { dispatcher } of phases.reverse())
         await dispatcher.stop();
-    },
-  };
-}
-
-export function createStartDevServerTask(): Task<TestRun> {
-  return {
-    title: 'start dev server',
-    setup: async ({ config }, errors, softErrors) => {
-      if (config.plugins.some(plugin => !!plugin.devServerCleanup)) {
-        errors.push({ message: `DevServer is already running` });
-        return;
-      }
-      for (const plugin of config.plugins)
-        plugin.devServerCleanup = await plugin.instance?.startDevServer?.();
-      if (!config.plugins.some(plugin => !!plugin.devServerCleanup))
-        errors.push({ message: `DevServer is not available in the package you are using. Did you mean to use component testing?` });
-    },
-
-    teardown: async ({ config }) => {
-      for (const plugin of config.plugins) {
-        await plugin.devServerCleanup?.();
-        plugin.devServerCleanup = undefined;
-      }
     },
   };
 }

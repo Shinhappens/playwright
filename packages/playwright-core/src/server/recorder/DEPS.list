@@ -6,7 +6,7 @@
 ../registry/**
 ../utils/**
 ../../generated/pollingRecorderSource.ts
+../../package.ts
 ../../protocol/
 ../../utils/**
-../../utilsBundle.ts
-../../zipBundle.ts
+node_modules/mime

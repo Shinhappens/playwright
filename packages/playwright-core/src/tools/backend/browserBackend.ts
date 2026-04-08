@@ -14,11 +14,10 @@
  * limitations under the License.
  */
 
+import debug from 'debug';
 import { Context } from './context';
 import { Response } from './response';
 import { SessionLog } from './sessionLog';
-import { debug } from '../../utilsBundle';
-
 import type { ContextConfig } from './context';
 import type * as playwright from '../../..';
 import type { Tool } from './tool';
@@ -51,7 +50,7 @@ export class BrowserBackend implements ServerBackend {
     await this._context?.dispose().catch(e => debug('pw:tools:error')(e));
   }
 
-  async callTool(name: string, rawArguments: mcpServer.CallToolRequest['params']['arguments']) {
+  async callTool(name: string, rawArguments: mcpServer.CallToolRequest['params']['arguments'] & { _meta?: Record<string, any> } = {}): Promise<mcpServer.CallToolResult> {
     const tool = this._tools.find(tool => tool.schema.name === name)!;
     if (!tool) {
       return {
@@ -59,10 +58,12 @@ export class BrowserBackend implements ServerBackend {
         isError: true,
       };
     }
-    const parsedArguments = tool.schema.inputSchema.parse(rawArguments || {}) as any;
-    const cwd = rawArguments?._meta && typeof rawArguments?._meta === 'object' && (rawArguments._meta as any)?.cwd;
+    // eslint-disable-next-line no-restricted-syntax
+    const parsedArguments = tool.schema.inputSchema.parse(rawArguments) as any;
+    const cwd = rawArguments._meta?.cwd;
+    const raw = !!rawArguments._meta?.raw;
     const context = this._context!;
-    const response = new Response(context, name, parsedArguments, cwd);
+    const response = new Response(context, name, parsedArguments, { relativeTo: cwd, raw });
     context.setRunningTool(name);
     let responseObject: mcpServer.CallToolResult;
     try {

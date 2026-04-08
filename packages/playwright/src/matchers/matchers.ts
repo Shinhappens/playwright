@@ -14,8 +14,14 @@
  * limitations under the License.
  */
 
-import { asLocatorDescription, constructURLBasedOnBaseURL, isRegExp, isString, isTextualMimeType, isURLPattern, pollAgainstDeadline, serializeExpectedTextValues, formatMatcherMessage } from 'playwright-core/lib/utils';
-import { colors } from 'playwright-core/lib/utils';
+import colors from 'colors/safe';
+import { asLocatorDescription } from '@isomorphic/locatorGenerators';
+import { isTextualMimeType } from '@isomorphic/mimeType';
+import { isRegExp } from '@isomorphic/rtti';
+import { isString } from '@isomorphic/stringUtils';
+import { pollAgainstDeadline } from '@isomorphic/timeoutRunner';
+import { constructURLBasedOnBaseURL, isURLPattern } from '@isomorphic/urlMatch';
+import { formatMatcherMessage, serializeExpectedTextValues } from '@utils/expectUtils';
 
 import { expectTypes } from '../util';
 import { toBeTruthy } from './toBeTruthy';
@@ -33,7 +39,8 @@ import type { TestStepInfoImpl } from '../worker/testInfo';
 import type { APIResponse, Locator, Frame, Page } from 'playwright-core';
 import type { FrameExpectParams } from 'playwright-core/lib/client/types';
 import type { ExpectMatcherUtils } from '../../types/test';
-import type { InternalMatcherUtils, URLPattern } from 'playwright-core/lib/utils';
+import type { InternalMatcherUtils } from '@utils/expectUtils';
+import type { URLPattern } from '@isomorphic/urlMatch';
 
 export type ExpectMatcherStateInternal = Omit<ExpectMatcherState, 'utils'> & {
   _stepInfo?: TestStepInfoImpl;
@@ -509,7 +516,7 @@ export function computeMatcherTitleSuffix(matcherName: string, receiver: any, ar
     const title = toHaveScreenshotStepTitle(...args);
     return { short: title ? `(${title})` : '' };
   }
-  if (receiver && typeof receiver === 'object' && receiver.constructor?.name === 'Locator') {
+  if (receiver && typeof receiver === 'object' && (receiver as any)._apiName === 'Locator') {
     try {
       return { long: ' ' + asLocatorDescription('javascript', (receiver as LocatorEx)._selector) };
     } catch {

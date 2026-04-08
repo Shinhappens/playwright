@@ -2100,6 +2100,31 @@ export interface Page {
   }): Promise<ElementHandle>;
 
   /**
+   * Captures the aria snapshot of the page. Read more about [aria snapshots](https://playwright.dev/docs/aria-snapshots).
+   * @param options
+   */
+  ariaSnapshot(options?: {
+    /**
+     * When specified, limits the depth of the snapshot.
+     */
+    depth?: number;
+
+    /**
+     * When set to `"ai"`, returns a snapshot optimized for AI consumption: including element references like `[ref=e2]`
+     * and snapshots of `<iframe>`s. Defaults to `"default"`.
+     */
+    mode?: "ai"|"default";
+
+    /**
+     * Maximum time in milliseconds. Defaults to `0` - no timeout. The default value can be changed via `actionTimeout`
+     * option in the config, or by using the
+     * [browserContext.setDefaultTimeout(timeout)](https://playwright.dev/docs/api/class-browsercontext#browser-context-set-default-timeout)
+     * or [page.setDefaultTimeout(timeout)](https://playwright.dev/docs/api/class-page#page-set-default-timeout) methods.
+     */
+    timeout?: number;
+  }): Promise<string>;
+
+  /**
    * Brings page to front (activates tab).
    */
   bringToFront(): Promise<void>;
@@ -2324,7 +2349,7 @@ export interface Page {
     /**
      * Controls which messages are returned:
      */
-    filter?: "all"|"sinceNavigation";
+    filter?: "all"|"since-navigation";
   }): Promise<Array<ConsoleMessage>>;
 
   /**
@@ -3656,7 +3681,7 @@ export interface Page {
     /**
      * Controls which errors are returned:
      */
-    filter?: "all"|"sinceNavigation";
+    filter?: "all"|"since-navigation";
   }): Promise<Array<Error>>;
 
   /**
@@ -4158,24 +4183,6 @@ export interface Page {
   routeWebSocket(url: string|RegExp|URLPattern|((url: URL) => boolean), handler: ((websocketroute: WebSocketRoute) => Promise<any>|any)): Promise<void>;
 
   /**
-   * Returns the [Screencast](https://playwright.dev/docs/api/class-screencast) object associated with this page.
-   *
-   * **Usage**
-   *
-   * ```js
-   * const screencast = page.screencast();
-   * screencast.on('screencastFrame', data => {
-   *   console.log('received frame, jpeg size:', data.length);
-   * });
-   * await screencast.start();
-   * // ... perform actions ...
-   * await screencast.stop();
-   * ```
-   *
-   */
-  screencast(): Screencast;
-
-  /**
    * Returns the buffer with the captured screenshot.
    * @param options
    */
@@ -4534,37 +4541,6 @@ export interface Page {
   }): Promise<void>;
 
   /**
-   * Returns an accessibility snapshot of the page optimized for AI consumption.
-   * @param options
-   */
-  snapshotForAI(options?: {
-    /**
-     * Maximum time in milliseconds. Defaults to `0` - no timeout. The default value can be changed via `actionTimeout`
-     * option in the config, or by using the
-     * [browserContext.setDefaultTimeout(timeout)](https://playwright.dev/docs/api/class-browsercontext#browser-context-set-default-timeout)
-     * or [page.setDefaultTimeout(timeout)](https://playwright.dev/docs/api/class-page#page-set-default-timeout) methods.
-     */
-    timeout?: number;
-
-    /**
-     * When specified, enables incremental snapshots. Subsequent calls with the same track name will return an incremental
-     * snapshot containing only changes since the last call.
-     */
-    track?: string;
-  }): Promise<{
-    /**
-     * Full accessibility snapshot of the page.
-     */
-    full: string;
-
-    /**
-     * Incremental snapshot containing only changes since the last tracked snapshot, when using the
-     * [`track`](https://playwright.dev/docs/api/class-page#page-snapshot-for-ai-option-track) option.
-     */
-    incremental?: string;
-  }>;
-
-  /**
    * **NOTE** Use locator-based [locator.tap([options])](https://playwright.dev/docs/api/class-locator#locator-tap) instead. Read
    * more about [locators](https://playwright.dev/docs/locators).
    *
@@ -4821,12 +4797,10 @@ export interface Page {
   url(): string;
 
   /**
-   * Video object associated with this page. Can be used to control video recording with
-   * [video.start([options])](https://playwright.dev/docs/api/class-video#video-start) and
-   * [video.stop([options])](https://playwright.dev/docs/api/class-video#video-stop), or to access the video file when
-   * using the `recordVideo` context option.
+   * Video object associated with this page. Can be used to access the video file when using the `recordVideo` context
+   * option.
    */
-  video(): Video;
+  video(): null|Video;
 
   viewportSize(): null|{
     /**
@@ -5310,6 +5284,23 @@ export interface Page {
    * details.
    */
   request: APIRequestContext;
+
+  /**
+   * [Screencast](https://playwright.dev/docs/api/class-screencast) object associated with this page.
+   *
+   * **Usage**
+   *
+   * ```js
+   * page.screencast.on('screencastFrame', data => {
+   *   console.log('received frame, jpeg size:', data.length);
+   * });
+   * await page.screencast.start();
+   * // ... perform actions ...
+   * await page.screencast.stop();
+   * ```
+   *
+   */
+  screencast: Screencast;
 
   touchscreen: Touchscreen;
 
@@ -8324,6 +8315,7 @@ export interface BrowserContext {
      */
     behavior?: 'wait'|'ignoreErrors'|'default'
   }): Promise<void>;
+
   /**
    * This event is not emitted.
    */
@@ -9130,7 +9122,7 @@ export interface BrowserContext {
   /**
    * Indicates that the browser context is in the process of closing or has already been closed.
    */
-  isClosedOrClosing(): boolean;
+  isClosed(): boolean;
 
   /**
    * **NOTE** CDP sessions are only supported on Chromium-based browsers.
@@ -9696,6 +9688,11 @@ export interface BrowserContext {
   clock: Clock;
 
   /**
+   * Debugger allows to pause and resume the execution.
+   */
+  debugger: Debugger;
+
+  /**
    * API testing helper associated with this context. Requests made with this API will use context cookies.
    */
   request: APIRequestContext;
@@ -9786,6 +9783,36 @@ export interface Browser {
   prependListener(event: 'disconnected', listener: (browser: Browser) => any): this;
 
   /**
+   * Binds the browser to a named pipe or web socket, making it available for other clients to connect to.
+   * @param title Title of the browser server, used for identification.
+   * @param options
+   */
+  bind(title: string, options?: {
+    /**
+     * Host to bind the web socket server to. When specified, a web socket server is created instead of a named pipe.
+     */
+    host?: string;
+
+    /**
+     * Additional metadata to associate with the browser server.
+     */
+    metadata?: { [key: string]: any; };
+
+    /**
+     * Port to bind the web socket server to. When specified, a web socket server is created instead of a named pipe. Use
+     * `0` to let the OS pick an available port.
+     */
+    port?: number;
+
+    /**
+     * Working directory associated with this browser server.
+     */
+    workspaceDir?: string;
+  }): Promise<{
+    endpoint: string;
+  }>;
+
+  /**
    * Get the browser type (chromium, firefox or webkit) that the browser belongs to.
    */
   browserType(): BrowserType;
@@ -9836,12 +9863,6 @@ export interface Browser {
    * Indicates that the browser is connected.
    */
   isConnected(): boolean;
-
-  /**
-   * Returns the launch options that were used to launch this browser. The return type matches the options accepted by
-   * [browserType.launch([options])](https://playwright.dev/docs/api/class-browsertype#browser-type-launch).
-   */
-  launchOptions(): Object;
 
   /**
    * **NOTE** CDP Sessions are only supported on Chromium-based browsers.
@@ -10181,9 +10202,10 @@ export interface Browser {
      */
     recordVideo?: {
       /**
-       * Path to the directory to put videos into.
+       * Path to the directory to put videos into. If not specified, the videos will be stored in `artifactsDir` (see
+       * [browserType.launch([options])](https://playwright.dev/docs/api/class-browsertype#browser-type-launch) options).
        */
-      dir: string;
+      dir?: string;
 
       /**
        * Optional dimensions of the recorded videos. If not specified the size will be equal to `viewport` scaled down to
@@ -10200,6 +10222,26 @@ export interface Browser {
          * Video frame height.
          */
         height: number;
+      };
+
+      /**
+       * If specified, enables visual annotations on interacted elements during video recording.
+       */
+      showActions?: {
+        /**
+         * How long each annotation is displayed in milliseconds. Defaults to `500`.
+         */
+        duration?: number;
+
+        /**
+         * Position of the action title overlay. Defaults to `"top-right"`.
+         */
+        position?: "top-left"|"top"|"top-right"|"bottom-left"|"bottom"|"bottom-right";
+
+        /**
+         * Font size of the action title in pixels. Defaults to `24`.
+         */
+        fontSize?: number;
       };
     };
 
@@ -10401,10 +10443,10 @@ export interface Browser {
   stopTracing(): Promise<Buffer>;
 
   /**
-   * Returns the user data directory that the browser was launched with, or `null` if the browser was launched without a
-   * persistent context.
+   * Unbinds the browser server previously bound with
+   * [browser.bind(title[, options])](https://playwright.dev/docs/api/class-browser#browser-bind).
    */
-  userDataDir(): null|string;
+  unbind(): Promise<void>;
 
   /**
    * Returns the browser version.
@@ -12770,9 +12812,25 @@ export interface Locator {
    *     - link "About"
    * ```
    *
+   * An AI-optimized snapshot, controlled by
+   * [`mode`](https://playwright.dev/docs/api/class-locator#locator-aria-snapshot-option-mode), is different from a
+   * default snapshot:
+   * 1. Includes element references `[ref=e2]`. 2. Does not wait for an element matching the locator, and throws when
+   *    no elements match. 3. Includes snapshots of `<iframe>`s inside the target.
    * @param options
    */
   ariaSnapshot(options?: {
+    /**
+     * When specified, limits the depth of the snapshot.
+     */
+    depth?: number;
+
+    /**
+     * When set to `"ai"`, returns a snapshot optimized for AI consumption. Defaults to `"default"`. See details for more
+     * information.
+     */
+    mode?: "ai"|"default";
+
     /**
      * Maximum time in milliseconds. Defaults to `0` - no timeout. The default value can be changed via `actionTimeout`
      * option in the config, or by using the
@@ -14199,6 +14257,13 @@ export interface Locator {
   }): Locator;
 
   /**
+   * Returns a new locator that uses best practices for referencing the matched element, prioritizing test ids, aria
+   * roles, and other user-facing attributes over CSS selectors. This is useful for converting implementation-detail
+   * selectors into more resilient, human-readable locators.
+   */
+  normalize(): Promise<Locator>;
+
+  /**
    * Returns locator to the n-th matching element. It's zero based, `nth(0)` selects the first element.
    *
    * **Usage**
@@ -14675,25 +14740,6 @@ export interface Locator {
   }): Promise<void>;
 
   /**
-   * Returns an accessibility snapshot of the element's subtree optimized for AI consumption.
-   * @param options
-   */
-  snapshotForAI(options?: {
-    /**
-     * Maximum time in milliseconds. Defaults to `0` - no timeout. The default value can be changed via `actionTimeout`
-     * option in the config, or by using the
-     * [browserContext.setDefaultTimeout(timeout)](https://playwright.dev/docs/api/class-browsercontext#browser-context-set-default-timeout)
-     * or [page.setDefaultTimeout(timeout)](https://playwright.dev/docs/api/class-page#page-set-default-timeout) methods.
-     */
-    timeout?: number;
-  }): Promise<{
-    /**
-     * Accessibility snapshot of the element matching this locator.
-     */
-    full: string;
-  }>;
-
-  /**
    * Perform a tap gesture on the element matching the locator. For examples of emulating other gestures by manually
    * dispatching touch events, see the [emulating legacy touch events](https://playwright.dev/docs/touch-events) page.
    *
@@ -14781,12 +14827,6 @@ export interface Locator {
      */
     timeout?: number;
   }): Promise<null|string>;
-
-  /**
-   * Returns a code string for a locator that uses best practices for referencing the matched element, prioritizing test
-   * ids, aria roles, and other user-facing attributes over CSS selectors.
-   */
-  toCode(): Promise<string>;
 
   /**
    * Focuses the element, and then sends a `keydown`, `keypress`/`input`, and `keyup` event for each character in the
@@ -15467,9 +15507,10 @@ export interface BrowserType<Unused = {}> {
      */
     recordVideo?: {
       /**
-       * Path to the directory to put videos into.
+       * Path to the directory to put videos into. If not specified, the videos will be stored in `artifactsDir` (see
+       * [browserType.launch([options])](https://playwright.dev/docs/api/class-browsertype#browser-type-launch) options).
        */
-      dir: string;
+      dir?: string;
 
       /**
        * Optional dimensions of the recorded videos. If not specified the size will be equal to `viewport` scaled down to
@@ -15486,6 +15527,26 @@ export interface BrowserType<Unused = {}> {
          * Video frame height.
          */
         height: number;
+      };
+
+      /**
+       * If specified, enables visual annotations on interacted elements during video recording.
+       */
+      showActions?: {
+        /**
+         * How long each annotation is displayed in milliseconds. Defaults to `500`.
+         */
+        duration?: number;
+
+        /**
+         * Position of the action title overlay. Defaults to `"top-right"`.
+         */
+        position?: "top-left"|"top"|"top-right"|"bottom-left"|"bottom"|"bottom-right";
+
+        /**
+         * Font size of the action title in pixels. Defaults to `24`.
+         */
+        fontSize?: number;
       };
     };
 
@@ -15825,7 +15886,7 @@ export interface CDPSession {
   /**
    * Emitted when the session is closed, either because the target was closed or `session.detach()` was called.
    */
-  on(event: 'close', listener: () => any): this;
+  on(event: 'close', listener: (cdpSession: CDPSession) => any): this;
 
   /**
    * Emitted for every CDP event received from the session. Allows subscribing to all CDP events at once without knowing
@@ -15855,7 +15916,7 @@ export interface CDPSession {
   /**
    * Adds an event listener that will be automatically removed after it is triggered once. See `addListener` for more information about this event.
    */
-  once(event: 'close', listener: () => any): this;
+  once(event: 'close', listener: (cdpSession: CDPSession) => any): this;
 
   /**
    * Adds an event listener that will be automatically removed after it is triggered once. See `addListener` for more information about this event.
@@ -15875,7 +15936,7 @@ export interface CDPSession {
   /**
    * Emitted when the session is closed, either because the target was closed or `session.detach()` was called.
    */
-  addListener(event: 'close', listener: () => any): this;
+  addListener(event: 'close', listener: (cdpSession: CDPSession) => any): this;
 
   /**
    * Emitted for every CDP event received from the session. Allows subscribing to all CDP events at once without knowing
@@ -15905,7 +15966,7 @@ export interface CDPSession {
   /**
    * Removes an event listener added by `on` or `addListener`.
    */
-  removeListener(event: 'close', listener: () => any): this;
+  removeListener(event: 'close', listener: (cdpSession: CDPSession) => any): this;
 
   /**
    * Removes an event listener added by `on` or `addListener`.
@@ -15925,7 +15986,7 @@ export interface CDPSession {
   /**
    * Removes an event listener added by `on` or `addListener`.
    */
-  off(event: 'close', listener: () => any): this;
+  off(event: 'close', listener: (cdpSession: CDPSession) => any): this;
 
   /**
    * Removes an event listener added by `on` or `addListener`.
@@ -15945,7 +16006,7 @@ export interface CDPSession {
   /**
    * Emitted when the session is closed, either because the target was closed or `session.detach()` was called.
    */
-  prependListener(event: 'close', listener: () => any): this;
+  prependListener(event: 'close', listener: (cdpSession: CDPSession) => any): this;
 
   /**
    * Emitted for every CDP event received from the session. Allows subscribing to all CDP events at once without knowing
@@ -16153,6 +16214,126 @@ export interface WebSocketRoute {
   url(): string;
 
   [Symbol.asyncDispose](): Promise<void>;
+}
+
+/**
+ * Interface for capturing screencast frames from a page.
+ */
+export interface Screencast {
+  /**
+   * Starts the screencast. When [`path`](https://playwright.dev/docs/api/class-screencast#screencast-start-option-path)
+   * is provided, it saves video recording to the specified file. When
+   * [`onFrame`](https://playwright.dev/docs/api/class-screencast#screencast-start-option-on-frame) is provided,
+   * delivers JPEG-encoded frames to the callback. Both can be used together.
+   *
+   * **Usage**
+   *
+   * ```js
+   * // Record video
+   * await page.screencast.start({ path: 'video.webm', size: { width: 1280, height: 800 } });
+   * // ... perform actions ...
+   * await page.screencast.stop();
+   * ```
+   *
+   * ```js
+   * // Capture frames
+   * await page.screencast.start({
+   *   onFrame: ({ data }) => console.log(`frame size: ${data.length}`),
+   *   size: { width: 800, height: 600 },
+   * });
+   * // ... perform actions ...
+   * await page.screencast.stop();
+   * ```
+   *
+   * @param options
+   */
+  start(options?: {
+    onFrame?: (frame: { data: Buffer }) => Promise<any>|any;
+    path?: string;
+    size?: {
+      width: number;
+      height: number;
+    };
+    quality?: number;
+    annotate?: {
+      duration?: number;
+      position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right';
+      fontSize?: number;
+    };
+  }): Promise<Disposable>;
+  /**
+   * Removes action decorations.
+   */
+  hideActions(): Promise<void>;
+
+  /**
+   * Hides overlays without removing them.
+   */
+  hideOverlays(): Promise<void>;
+
+  /**
+   * Enables visual annotations on interacted elements. Returns a disposable that stops showing actions when disposed.
+   * @param options
+   */
+  showActions(options?: {
+    /**
+     * How long each annotation is displayed in milliseconds. Defaults to `500`.
+     */
+    duration?: number;
+
+    /**
+     * Font size of the action title in pixels. Defaults to `24`.
+     */
+    fontSize?: number;
+
+    /**
+     * Position of the action title overlay. Defaults to `"top-right"`.
+     */
+    position?: "top-left"|"top"|"top-right"|"bottom-left"|"bottom"|"bottom-right";
+  }): Promise<Disposable>;
+
+  /**
+   * Shows a chapter overlay with a title and optional description, centered on the page with a blurred backdrop. Useful
+   * for narrating video recordings. The overlay is removed after the specified duration, or 2000ms.
+   * @param title Title text displayed prominently in the overlay.
+   * @param options
+   */
+  showChapter(title: string, options?: {
+    /**
+     * Optional description text displayed below the title.
+     */
+    description?: string;
+
+    /**
+     * Duration in milliseconds after which the overlay is automatically removed. Defaults to `2000`.
+     */
+    duration?: number;
+  }): Promise<void>;
+
+  /**
+   * Adds an overlay with the given HTML content. The overlay is displayed on top of the page until removed. Returns a
+   * disposable that removes the overlay when disposed.
+   * @param html HTML content for the overlay.
+   * @param options
+   */
+  showOverlay(html: string, options?: {
+    /**
+     * Duration in milliseconds after which the overlay is automatically removed. Overlay stays until dismissed if not
+     * provided.
+     */
+    duration?: number;
+  }): Promise<Disposable>;
+
+  /**
+   * Shows overlays.
+   */
+  showOverlays(): Promise<void>;
+
+  /**
+   * Stops the screencast and video recording if active. If a video was being recorded, saves it to the path specified
+   * in [screencast.start([options])](https://playwright.dev/docs/api/class-screencast#screencast-start).
+   */
+  stop(): Promise<void>;
 }
 
 type DeviceDescriptor = {
@@ -17297,9 +17478,10 @@ export interface AndroidDevice {
      */
     recordVideo?: {
       /**
-       * Path to the directory to put videos into.
+       * Path to the directory to put videos into. If not specified, the videos will be stored in `artifactsDir` (see
+       * [browserType.launch([options])](https://playwright.dev/docs/api/class-browsertype#browser-type-launch) options).
        */
-      dir: string;
+      dir?: string;
 
       /**
        * Optional dimensions of the recorded videos. If not specified the size will be equal to `viewport` scaled down to
@@ -17316,6 +17498,26 @@ export interface AndroidDevice {
          * Video frame height.
          */
         height: number;
+      };
+
+      /**
+       * If specified, enables visual annotations on interacted elements during video recording.
+       */
+      showActions?: {
+        /**
+         * How long each annotation is displayed in milliseconds. Defaults to `500`.
+         */
+        duration?: number;
+
+        /**
+         * Position of the action title overlay. Defaults to `"top-right"`.
+         */
+        position?: "top-left"|"top"|"top-right"|"bottom-left"|"bottom"|"bottom-right";
+
+        /**
+         * Font size of the action title in pixels. Defaults to `24`.
+         */
+        fontSize?: number;
       };
     };
 
@@ -19405,6 +19607,95 @@ export interface Coverage {
 }
 
 /**
+ * API for controlling the Playwright debugger. The debugger allows pausing script execution and inspecting the page.
+ * Obtain the debugger instance via
+ * [browserContext.debugger](https://playwright.dev/docs/api/class-browsercontext#browser-context-debugger).
+ */
+export interface Debugger {
+  /**
+   * Emitted when the debugger pauses or resumes.
+   */
+  on(event: 'pausedstatechanged', listener: () => any): this;
+
+  /**
+   * Adds an event listener that will be automatically removed after it is triggered once. See `addListener` for more information about this event.
+   */
+  once(event: 'pausedstatechanged', listener: () => any): this;
+
+  /**
+   * Emitted when the debugger pauses or resumes.
+   */
+  addListener(event: 'pausedstatechanged', listener: () => any): this;
+
+  /**
+   * Removes an event listener added by `on` or `addListener`.
+   */
+  removeListener(event: 'pausedstatechanged', listener: () => any): this;
+
+  /**
+   * Removes an event listener added by `on` or `addListener`.
+   */
+  off(event: 'pausedstatechanged', listener: () => any): this;
+
+  /**
+   * Emitted when the debugger pauses or resumes.
+   */
+  prependListener(event: 'pausedstatechanged', listener: () => any): this;
+
+  /**
+   * Resumes script execution and pauses again before the next action. Throws if the debugger is not paused.
+   */
+  next(): Promise<void>;
+
+  /**
+   * Returns details about the currently paused call. Returns `null` if the debugger is not paused.
+   */
+  pausedDetails(): null|{
+    location: {
+      file: string;
+
+      line?: number;
+
+      column?: number;
+    };
+
+    title: string;
+  };
+
+  /**
+   * Configures the debugger to pause before the next action is executed.
+   *
+   * Throws if the debugger is already paused. Use
+   * [debugger.next()](https://playwright.dev/docs/api/class-debugger#debugger-next) or
+   * [debugger.runTo(location)](https://playwright.dev/docs/api/class-debugger#debugger-run-to) to step while paused.
+   *
+   * Note that [page.pause()](https://playwright.dev/docs/api/class-page#page-pause) is equivalent to a "debugger"
+   * statement — it pauses execution at the call site immediately. On the contrary,
+   * [debugger.requestPause()](https://playwright.dev/docs/api/class-debugger#debugger-request-pause) is equivalent to
+   * "pause on next statement" — it configures the debugger to pause before the next action is executed.
+   */
+  requestPause(): Promise<void>;
+
+  /**
+   * Resumes script execution. Throws if the debugger is not paused.
+   */
+  resume(): Promise<void>;
+
+  /**
+   * Resumes script execution and pauses when an action originates from the given source location. Throws if the
+   * debugger is not paused.
+   * @param location The source location to pause at.
+   */
+  runTo(location: {
+    file: string;
+
+    line?: number;
+
+    column?: number;
+  }): Promise<void>;
+}
+
+/**
  * [Dialog](https://playwright.dev/docs/api/class-dialog) objects are dispatched by page via the
  * [page.on('dialog')](https://playwright.dev/docs/api/class-page#page-event-dialog) event.
  *
@@ -19641,6 +19932,13 @@ export interface Electron {
     args?: Array<string>;
 
     /**
+     * If specified, artifacts (traces, videos, downloads, HAR files, etc.) are saved into this directory. The directory
+     * is not cleaned up when the browser closes. If not specified, a temporary directory is used and cleaned up when the
+     * browser closes.
+     */
+    artifactsDir?: string;
+
+    /**
      * Toggles bypassing page's Content-Security-Policy. Defaults to `false`.
      */
     bypassCSP?: boolean;
@@ -19788,9 +20086,10 @@ export interface Electron {
      */
     recordVideo?: {
       /**
-       * Path to the directory to put videos into.
+       * Path to the directory to put videos into. If not specified, the videos will be stored in `artifactsDir` (see
+       * [browserType.launch([options])](https://playwright.dev/docs/api/class-browsertype#browser-type-launch) options).
        */
-      dir: string;
+      dir?: string;
 
       /**
        * Optional dimensions of the recorded videos. If not specified the size will be equal to `viewport` scaled down to
@@ -19807,6 +20106,26 @@ export interface Electron {
          * Video frame height.
          */
         height: number;
+      };
+
+      /**
+       * If specified, enables visual annotations on interacted elements during video recording.
+       */
+      showActions?: {
+        /**
+         * How long each annotation is displayed in milliseconds. Defaults to `500`.
+         */
+        duration?: number;
+
+        /**
+         * Position of the action title overlay. Defaults to `"top-right"`.
+         */
+        position?: "top-left"|"top"|"top-right"|"bottom-left"|"bottom"|"bottom-right";
+
+        /**
+         * Font size of the action title in pixels. Defaults to `24`.
+         */
+        fontSize?: number;
       };
     };
 
@@ -21551,165 +21870,6 @@ export interface Route {
 }
 
 /**
- * Interface for capturing screencast frames from a page.
- */
-export interface Screencast {
-  /**
-   * Emitted for each captured JPEG screencast frame while the screencast is running.
-   *
-   * **Usage**
-   *
-   * ```js
-   * const screencast = page.screencast();
-   * screencast.on('screencastframe', ({ data, width, height }) => {
-   *   console.log(`frame ${width}x${height}, jpeg size: ${data.length}`);
-   *   require('fs').writeFileSync('frame.jpg', data);
-   * });
-   * await screencast.start({ maxSize: { width: 1200, height: 800 } });
-   * // ... perform actions ...
-   * await screencast.stop();
-   * ```
-   *
-   */
-  on(event: 'screencastframe', listener: (data: {
-    /**
-     * JPEG-encoded frame data.
-     */
-    data: Buffer;
-  }) => any): this;
-
-  /**
-   * Adds an event listener that will be automatically removed after it is triggered once. See `addListener` for more information about this event.
-   */
-  once(event: 'screencastframe', listener: (data: {
-    /**
-     * JPEG-encoded frame data.
-     */
-    data: Buffer;
-  }) => any): this;
-
-  /**
-   * Emitted for each captured JPEG screencast frame while the screencast is running.
-   *
-   * **Usage**
-   *
-   * ```js
-   * const screencast = page.screencast();
-   * screencast.on('screencastframe', ({ data, width, height }) => {
-   *   console.log(`frame ${width}x${height}, jpeg size: ${data.length}`);
-   *   require('fs').writeFileSync('frame.jpg', data);
-   * });
-   * await screencast.start({ maxSize: { width: 1200, height: 800 } });
-   * // ... perform actions ...
-   * await screencast.stop();
-   * ```
-   *
-   */
-  addListener(event: 'screencastframe', listener: (data: {
-    /**
-     * JPEG-encoded frame data.
-     */
-    data: Buffer;
-  }) => any): this;
-
-  /**
-   * Removes an event listener added by `on` or `addListener`.
-   */
-  removeListener(event: 'screencastframe', listener: (data: {
-    /**
-     * JPEG-encoded frame data.
-     */
-    data: Buffer;
-  }) => any): this;
-
-  /**
-   * Removes an event listener added by `on` or `addListener`.
-   */
-  off(event: 'screencastframe', listener: (data: {
-    /**
-     * JPEG-encoded frame data.
-     */
-    data: Buffer;
-  }) => any): this;
-
-  /**
-   * Emitted for each captured JPEG screencast frame while the screencast is running.
-   *
-   * **Usage**
-   *
-   * ```js
-   * const screencast = page.screencast();
-   * screencast.on('screencastframe', ({ data, width, height }) => {
-   *   console.log(`frame ${width}x${height}, jpeg size: ${data.length}`);
-   *   require('fs').writeFileSync('frame.jpg', data);
-   * });
-   * await screencast.start({ maxSize: { width: 1200, height: 800 } });
-   * // ... perform actions ...
-   * await screencast.stop();
-   * ```
-   *
-   */
-  prependListener(event: 'screencastframe', listener: (data: {
-    /**
-     * JPEG-encoded frame data.
-     */
-    data: Buffer;
-  }) => any): this;
-
-  /**
-   * Starts capturing screencast frames. Frames are emitted as
-   * [screencast.on('screencastframe')](https://playwright.dev/docs/api/class-screencast#screencast-event-screencast-frame)
-   * events.
-   *
-   * **Usage**
-   *
-   * ```js
-   * const screencast = page.screencast();
-   * screencast.on('screencastframe', ({ data, width, height }) => {
-   *   console.log(`frame ${width}x${height}, size: ${data.length}`);
-   * });
-   * await screencast.start({ maxSize: { width: 800, height: 600 } });
-   * // ... perform actions ...
-   * await screencast.stop();
-   * ```
-   *
-   * @param options
-   */
-  start(options?: {
-    /**
-     * Maximum screencast frame dimensions. The output frame may be smaller to preserve the page aspect ratio. Defaults to
-     * 800×800.
-     */
-    maxSize?: {
-      /**
-       * Max frame width in pixels.
-       */
-      width: number;
-
-      /**
-       * Max frame height in pixels.
-       */
-      height: number;
-    };
-  }): Promise<void>;
-
-  /**
-   * Stops the screencast started with
-   * [screencast.start([options])](https://playwright.dev/docs/api/class-screencast#screencast-start).
-   *
-   * **Usage**
-   *
-   * ```js
-   * await screencast.start();
-   * // ... perform actions ...
-   * await screencast.stop();
-   * ```
-   *
-   */
-  stop(): Promise<void>;
-}
-
-/**
  * Selectors can be used to install custom selector engines. See [extensibility](https://playwright.dev/docs/extensibility) for more
  * information.
  */
@@ -21870,7 +22030,7 @@ export interface Tracing {
 
       column?: number;
     };
-  }): Promise<void>;
+  }): Promise<Disposable>;
 
   /**
    * Closes the last group created by
@@ -22022,16 +22182,6 @@ export interface Tracing {
  * console.log(await page.video().path());
  * ```
  *
- * Alternatively, you can use [video.start([options])](https://playwright.dev/docs/api/class-video#video-start) and
- * [video.stop([options])](https://playwright.dev/docs/api/class-video#video-stop) to record video manually. This
- * approach is mutually exclusive with the `recordVideo` option.
- *
- * ```js
- * await page.video().start();
- * // ... perform actions ...
- * await page.video().stop({ path: 'video.webm' });
- * ```
- *
  */
 export interface Video {
   /**
@@ -22051,49 +22201,6 @@ export interface Video {
    * @param path Path where the video should be saved.
    */
   saveAs(path: string): Promise<void>;
-
-  /**
-   * Starts video recording. This method is mutually exclusive with the `recordVideo` context option.
-   *
-   * **Usage**
-   *
-   * ```js
-   * await page.video().start();
-   * // ... perform actions ...
-   * await page.video().stop({ path: 'video.webm' });
-   * ```
-   *
-   * @param options
-   */
-  start(options?: {
-    /**
-     * Optional dimensions of the recorded video. If not specified the size will be equal to page viewport scaled down to
-     * fit into 800x800. Actual picture of the page will be scaled down if necessary to fit the specified size.
-     */
-    size?: {
-      /**
-       * Video frame width.
-       */
-      width: number;
-
-      /**
-       * Video frame height.
-       */
-      height: number;
-    };
-  }): Promise<void>;
-
-  /**
-   * Stops video recording started with
-   * [video.start([options])](https://playwright.dev/docs/api/class-video#video-start).
-   * @param options
-   */
-  stop(options?: {
-    /**
-     * Path where the video should be saved.
-     */
-    path?: string;
-  }): Promise<void>;
 }
 
 /**
@@ -22952,9 +23059,10 @@ export interface BrowserContextOptions {
    */
   recordVideo?: {
     /**
-     * Path to the directory to put videos into.
+     * Path to the directory to put videos into. If not specified, the videos will be stored in `artifactsDir` (see
+     * [browserType.launch([options])](https://playwright.dev/docs/api/class-browsertype#browser-type-launch) options).
      */
-    dir: string;
+    dir?: string;
 
     /**
      * Optional dimensions of the recorded videos. If not specified the size will be equal to `viewport` scaled down to
@@ -22971,6 +23079,26 @@ export interface BrowserContextOptions {
        * Video frame height.
        */
       height: number;
+    };
+
+    /**
+     * If specified, enables visual annotations on interacted elements during video recording.
+     */
+    showActions?: {
+      /**
+       * How long each annotation is displayed in milliseconds. Defaults to `500`.
+       */
+      duration?: number;
+
+      /**
+       * Position of the action title overlay. Defaults to `"top-right"`.
+       */
+      position?: "top-left"|"top"|"top-right"|"bottom-left"|"bottom"|"bottom-right";
+
+      /**
+       * Font size of the action title in pixels. Defaults to `24`.
+       */
+      fontSize?: number;
     };
   };
 

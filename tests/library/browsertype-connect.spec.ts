@@ -19,13 +19,14 @@ import fs from 'fs';
 import type http from 'http';
 import type net from 'net';
 import * as path from 'path';
-import { getUserAgent, getPlaywrightVersion } from '../../packages/playwright-core/lib/server/utils/userAgent';
+import { utils } from '../../packages/playwright-core/lib/coreBundle';
 import WebSocket from 'ws';
 import { expect, playwrightTest } from '../config/browserTest';
 import { parseTraceRaw, suppressCertificateWarning, rafraf } from '../config/utils';
 import formidable from 'formidable';
 import type { Browser, ConnectOptions } from 'playwright-core';
-import { createHttpServer } from '../../packages/playwright-core/lib/server/utils/network';
+
+const { getUserAgent, getPlaywrightVersion, createHttpServer } = utils;
 import { kTargetClosedErrorMessage } from '../config/errors';
 import { RunServer } from '../config/remoteServer';
 
@@ -508,8 +509,6 @@ for (const kind of ['launchServer', 'run-server'] as const) {
       const savedAsPath = testInfo.outputPath('my-video.webm');
       await page.video().saveAs(savedAsPath);
       expect(fs.existsSync(savedAsPath)).toBeTruthy();
-      const error = await page.video().path().catch(e => e);
-      expect(error.message).toContain('Path is not available when connecting remotely. Use saveAs() to save a local copy.');
     });
 
     test('should save videos to artifactsDir', async ({ connect, startRemoteServer }, testInfo) => {
@@ -529,6 +528,23 @@ for (const kind of ['launchServer', 'run-server'] as const) {
       await page.video().saveAs(savedAsPath);
       expect(fs.existsSync(savedAsPath)).toBeTruthy();
       expect(fs.existsSync(localDir)).toBeFalsy();
+
+      await browser.close();
+    });
+
+    test('should name video file after page guid when connecting to remote browser with artifactsDir', async ({ connect, startRemoteServer }, testInfo) => {
+      const artifactsDir = testInfo.outputPath('artifacts');
+      const remoteServer = await startRemoteServer(kind, { artifactsDir });
+      const browser = await connect(remoteServer.wsEndpoint());
+      const context = await browser.newContext({
+        recordVideo: { size: { width: 320, height: 240 } },
+      });
+      const page = await context.newPage();
+      await page.evaluate(() => document.body.style.backgroundColor = 'red');
+      await rafraf(page, 100);
+      await context.close();
+
+      expect(fs.existsSync(path.join(artifactsDir, (page as any)._guid + '.webm'))).toBeTruthy();
 
       await browser.close();
     });
@@ -704,8 +720,10 @@ for (const kind of ['launchServer', 'run-server'] as const) {
       expect(await response.json()).toEqual({ 'foo': 'bar' });
     });
 
-    test('should upload large file', async ({ connect, startRemoteServer, server }, testInfo) => {
-      test.slow();
+    test('should upload large file', async ({ connect, startRemoteServer, server, isMac }, testInfo) => {
+      if (isMac)
+        test.setTimeout(test.info().timeout * 3);  // Extra slow!
+
       const remoteServer = await startRemoteServer(kind);
       const browser = await connect(remoteServer.wsEndpoint());
       const context = await browser.newContext();

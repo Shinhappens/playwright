@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-import { scaleImageToSize } from '../../utils/isomorphic/imageUtils';
-import { jpegjs, PNG } from '../../utilsBundle';
-import { formatObject } from '../../utils/isomorphic/stringUtils';
+import jpegjs from 'jpeg-js';
+import { PNG } from 'pngjs';
+import * as z from 'zod';
+import { formatObject } from '@isomorphic/stringUtils';
 
-import { z } from '../../mcpBundle';
+import { scaleImageToSize } from '@isomorphic/imageUtils';
 import { defineTabTool } from './tool';
 
 import type * as playwright from '../../..';
@@ -86,6 +87,7 @@ export function scaleImageToFitMessage(buffer: Buffer, imageType: 'png' | 'jpeg'
   const width = image.width * shrink | 0;
   const height = image.height * shrink | 0;
   const scaledImage = scaleImageToSize(image, { width, height });
+  // eslint-disable-next-line no-restricted-syntax
   return imageType === 'png' ? PNG.sync.write(scaledImage as any) : jpegjs.encode(scaledImage, 80).data;
 }
 

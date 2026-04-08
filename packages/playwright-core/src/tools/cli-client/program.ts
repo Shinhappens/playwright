@@ -20,38 +20,43 @@
 import { execSync, spawn } from 'child_process';
 
 import crypto from 'crypto';
-import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { createClientInfo, Registry, resolveSessionName } from './registry';
+import { clientKey, createClientInfo, explicitSessionName, Registry, resolveSessionName } from './registry';
 import { Session, renderResolvedConfig } from './session';
+import { libPath } from '../../package';
 import { serverRegistry } from '../../serverRegistry';
+import { minimist } from './minimist';
 
-import type { Config } from '../mcp/config.d';
 import type { ClientInfo, SessionFile } from './registry';
-import type { BrowserDescriptor } from '../../serverRegistry';
-
-type MinimistArgs = {
-  _: string[];
-  [key: string]: any;
-};
+import type { BrowserStatus } from '../../serverRegistry';
+import type { MinimistArgs } from './minimist';
 
 type GlobalOptions = {
   help?: boolean;
+  raw?: boolean;
   session?: string;
   version?: boolean;
+};
+
+type AttachOptions = {
+  config?: string;
+  cdp?: string;
+  endpoint?: string;
+  extension?: boolean | string;
 };
 
 type OpenOptions = {
   browser?: string;
   config?: string;
-  extension?: boolean;
   headed?: boolean;
   persistent?: boolean;
   profile?: string;
 };
 
-const globalOptions: (keyof (GlobalOptions & OpenOptions))[] = [
+const globalOptions: (keyof (GlobalOptions & OpenOptions & AttachOptions))[] = [
+  'cdp',
+  'endpoint',
   'browser',
   'config',
   'extension',
@@ -59,37 +64,25 @@ const globalOptions: (keyof (GlobalOptions & OpenOptions))[] = [
   'help',
   'persistent',
   'profile',
+  'raw',
   'session',
   'version',
 ];
 
-const booleanOptions: (keyof (GlobalOptions & OpenOptions & { all?: boolean }))[] = [
+const booleanOptions: (keyof (GlobalOptions & OpenOptions & AttachOptions & { all?: boolean }))[] = [
   'all',
   'help',
+  'raw',
   'version',
 ];
 
 export async function program(options?: { embedderVersion?: string}) {
   const clientInfo = createClientInfo();
-  const help = require('./help.json');
+  const help = require(libPath('tools', 'cli-client', 'help.json'));
 
   const argv = process.argv.slice(2);
   const boolean = [...help.booleanOptions, ...booleanOptions];
-  const args: MinimistArgs = require('minimist')(argv, { boolean, string: ['_'] });
-  for (const [key, value] of Object.entries(args)) {
-    if (key !== '_' && typeof value !== 'boolean')
-      args[key] = String(value);
-  }
-  for (let index = 0; index < args._.length; index++)
-    args._[index] = String(args._[index]);
-  for (const option of boolean) {
-    if (!argv.includes(`--${option}`) && !argv.includes(`--no-${option}`))
-      delete args[option];
-    if (argv.some(arg => arg.startsWith(`--${option}=`) || arg.startsWith(`--no-${option}=`))) {
-      console.error(`boolean option '--${option}' should not be passed with '=value', use '--${option}' or '--no-${option}' instead`);
-      process.exit(1);
-    }
-  }
+  const args: MinimistArgs = minimist(argv, { boolean, string: ['_'] });
   // Normalize -s alias to --session
   if (args.s) {
     args.session = args.s;
@@ -106,7 +99,7 @@ export async function program(options?: { embedderVersion?: string}) {
   const command = commandName && help.commands[commandName];
   if (args.help || args.h) {
     if (command) {
-      console.log(command);
+      console.log(command.help);
     } else {
       console.log('playwright-cli - run playwright mcp commands from terminal\n');
       console.log(help.global);
@@ -120,12 +113,14 @@ export async function program(options?: { embedderVersion?: string}) {
     process.exit(1);
   }
 
+  validateFlags(args, command);
+
   const registry = await Registry.load();
-  const sessionName = resolveSessionName(args.session);
+  const sessionName = resolveSessionName(args.session as string);
 
   switch (commandName) {
     case 'list': {
-      await listSessions(registry, clientInfo, args.all);
+      await listSessions(registry, clientInfo, !!args.all);
       return;
     }
     case 'close-all': {
@@ -148,13 +143,24 @@ export async function program(options?: { embedderVersion?: string}) {
       return;
     }
     case 'open': {
-      const entry = registry.entry(clientInfo, sessionName);
-      if (entry)
-        await new Session(entry).stop(true);
-
-      await Session.startDaemon(clientInfo, args);
-      const newEntry = await registry.loadEntry(clientInfo, sessionName);
-      await runInSession(newEntry, clientInfo, args);
+      await startSession(sessionName, registry, clientInfo, args);
+      return;
+    }
+    case 'attach': {
+      const attachTarget = args._[1] as string | undefined;
+      if (attachTarget && (args.cdp || args.endpoint || args.extension)) {
+        console.error(`Error: cannot use target name with --cdp, --endpoint, or --extension`);
+        process.exit(1);
+      }
+      if (attachTarget)
+        args.endpoint = attachTarget;
+      if (typeof args.extension === 'string') {
+        args.browser = args.extension;
+        args.extension = true;
+      }
+      const attachSessionName = explicitSessionName(args.session as string) ?? attachTarget ?? sessionName;
+      args.session = attachSessionName;
+      await startSession(attachSessionName, registry, clientInfo, args);
       return;
     }
     case 'close':
@@ -167,13 +173,13 @@ export async function program(options?: { embedderVersion?: string}) {
       await session.stop();
       return;
     case 'install':
-      await install(args);
+      await runInitWorkspace(args);
       return;
     case 'install-browser':
       await installBrowser();
       return;
     case 'show': {
-      const daemonScript = require.resolve('../dashboard/dashboardApp.js');
+      const daemonScript = libPath('entry', 'dashboardApp.js');
       const child = spawn(process.execPath, [daemonScript], {
         detached: true,
         stdio: 'ignore',
@@ -194,97 +200,49 @@ export async function program(options?: { embedderVersion?: string}) {
   }
 }
 
+async function startSession(sessionName: string, registry: Registry, clientInfo: ClientInfo, args: MinimistArgs) {
+  const entry = registry.entry(clientInfo, sessionName);
+  if (entry)
+    await new Session(entry).stop(true);
+
+  await Session.startDaemon(clientInfo, args);
+  const newEntry = await registry.loadEntry(clientInfo, sessionName);
+  await runInSession(newEntry, clientInfo, args);
+}
+
 async function runInSession(entry: SessionFile, clientInfo: ClientInfo, args: MinimistArgs) {
+  const raw = !!args.raw;
   for (const globalOption of globalOptions)
     delete args[globalOption];
   const session = new Session(entry);
-  const result = await session.run(clientInfo, args);
+  const result = await session.run(clientInfo, args, { raw });
   console.log(result.text);
 }
 
-async function install(args: MinimistArgs) {
-  const cwd = process.cwd();
-
-  // Create .playwright folder to mark workspace root
-  const playwrightDir = path.join(cwd, '.playwright');
-  await fs.promises.mkdir(playwrightDir, { recursive: true });
-  console.log(`✅ Workspace initialized at \`${cwd}\`.`);
-
-  if (args.skills) {
-    const skillSourceDir = path.join(__dirname, '../../skill');
-    const skillDestDir = path.join(cwd, '.claude', 'skills', 'playwright-cli');
-
-    if (!fs.existsSync(skillSourceDir)) {
-      console.error('❌ Skills source directory not found:', skillSourceDir);
-      process.exit(1);
-    }
-
-    await fs.promises.cp(skillSourceDir, skillDestDir, { recursive: true });
-    console.log(`✅ Skills installed to \`${path.relative(cwd, skillDestDir)}\`.`);
-  }
-
-  await ensureConfiguredBrowserInstalled();
-}
-
-async function ensureConfiguredBrowserInstalled() {
-  if (fs.existsSync(defaultConfigFile())) {
-    const { registry } = await import('playwright-core/lib/server/registry/index');
-    // Config exists, ensure configured browser is installed
-    const data = await fs.promises.readFile(defaultConfigFile(), 'utf-8');
-    const config = JSON.parse(data.charCodeAt(0) === 0xFEFF ? data.slice(1) : data) as Config;
-    const browserName = config.browser?.browserName ?? 'chromium';
-    const channel = config.browser?.launchOptions?.channel;
-    if (!channel || channel.startsWith('chromium')) {
-      const executable = registry.findExecutable(channel ?? browserName);
-      if (executable && !fs.existsSync(executable?.executablePath()!))
-        await registry.install([executable]);
-    }
-  } else {
-    // No config exists, detect or install a browser and create config
-    const channel = await findOrInstallDefaultBrowser();
-    if (channel !== 'chrome')
-      await createDefaultConfig(channel);
-  }
+async function runInitWorkspace(args: MinimistArgs) {
+  const cliPath = libPath('entry', 'cliDaemon.js');
+  const daemonArgs: string[] = [cliPath, '--init-workspace', ...(args.skills ? ['--init-skills', String(args.skills)] : [])];
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(process.execPath, daemonArgs, {
+      stdio: 'inherit',
+      cwd: process.cwd(),
+    });
+    child.on('close', code => {
+      if (code === 0)
+        resolve();
+      else
+        reject(new Error(`Workspace initialization failed with exit code ${code}`));
+    });
+  });
 }
 
 async function installBrowser() {
-  const { program } = require('../../cli/program');
   const argv = process.argv.map(arg => arg === 'install-browser' ? 'install' : arg);
+  const { libCli } = require('../../coreBundle.js') as typeof import('../../coreBundle');
+  const { program } = require('../../utilsBundle.js') as typeof import('../../utilsBundle');
+  if (!program.version())
+    libCli.decorateProgram(program);
   program.parse(argv);
-}
-
-async function createDefaultConfig(channel: string) {
-  const config: Config = {
-    browser: {
-      browserName: 'chromium',
-      launchOptions: {
-        channel,
-      },
-    },
-  };
-  await fs.promises.writeFile(defaultConfigFile(), JSON.stringify(config, null, 2));
-  console.log(`✅ Created default config for ${channel} at ${path.relative(process.cwd(), defaultConfigFile())}.`);
-}
-
-async function findOrInstallDefaultBrowser() {
-  const { registry } = await import('playwright-core/lib/server/registry/index');
-  const channels = ['chrome', 'msedge'];
-  for (const channel of channels) {
-    const executable = registry.findExecutable(channel);
-    if (!executable?.executablePath())
-      continue;
-    console.log(`✅ Found ${channel}, will use it as the default browser.`);
-    return channel;
-  }
-  const chromiumExecutable = registry.findExecutable('chromium');
-  // Unlike channels, chromium executable path is always valid, even if the browser is not installed.
-  if (!fs.existsSync(chromiumExecutable?.executablePath()!))
-    await registry.install([chromiumExecutable]);
-  return 'chromium';
-}
-
-function defaultConfigFile(): string {
-  return path.resolve('.playwright', 'cli.config.json');
 }
 
 async function killAllDaemons(): Promise<void> {
@@ -296,7 +254,7 @@ async function killAllDaemons(): Promise<void> {
       const result = execSync(
           `powershell -NoProfile -NonInteractive -Command `
           + `"Get-CimInstance Win32_Process `
-          + `| Where-Object { $_.CommandLine -like '*run-mcp-server*' -or $_.CommandLine -like '*run-cli-server*' -or $_.CommandLine -like '*cli-daemon*' } `
+          + `| Where-Object { $_.CommandLine -like '*run-mcp-server*' -or $_.CommandLine -like '*run-cli-server*' -or $_.CommandLine -like '*cli-daemon*' -or $_.CommandLine -like '*dashboardApp.js*' } `
           + `| ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $_.ProcessId }"`,
           { encoding: 'utf-8' }
       );
@@ -310,7 +268,7 @@ async function killAllDaemons(): Promise<void> {
       const result = execSync('ps aux', { encoding: 'utf-8' });
       const lines = result.split('\n');
       for (const line of lines) {
-        if (line.includes('run-mcp-server') || line.includes('run-cli-server') || line.includes('cli-daemon')) {
+        if (line.includes('run-mcp-server') || line.includes('run-cli-server') || line.includes('cli-daemon') || line.includes('dashboardApp.js')) {
           const parts = line.trim().split(/\s+/);
           const pid = parts[1];
           if (pid && /^\d+$/.test(pid)) {
@@ -336,40 +294,39 @@ async function killAllDaemons(): Promise<void> {
 }
 
 async function listSessions(registry: Registry, clientInfo: ClientInfo, all: boolean): Promise<void> {
-  if (all) {
-    const entries = registry.entryMap();
-    const serverEntries = await serverRegistry.list();
-    if (entries.size === 0 && serverEntries.size === 0) {
-      console.log('No browsers found.');
-      return;
-    }
+  console.log('### Browsers');
 
-    const runningSessions = new Set<string>();
-    if (entries.size)
-      console.log('### Browsers');
-    for (const [workspace, list] of entries)
-      await gcAndPrintSessions(clientInfo, list.map(entry => new Session(entry)), `${path.relative(process.cwd(), workspace) || '/'}:`, runningSessions);
-
-    // Filter out server entries that already have an attached session.
-    const filteredServerEntries = new Map<string, BrowserDescriptor[]>();
-    for (const [workspace, list] of serverEntries) {
-      const unattached = list.filter(d => !runningSessions.has(d.title));
-      if (unattached.length)
-        filteredServerEntries.set(workspace, unattached);
-    }
-
-    if (filteredServerEntries.size) {
-      if (entries.size)
-        console.log('');
-      console.log('### Browser servers available for attach');
-    }
-    for (const [workspace, list] of filteredServerEntries)
-      await gcAndPrintBrowserSessions(workspace, list);
-  } else {
-    console.log('### Browsers');
-    const entries = registry.entries(clientInfo);
-    await gcAndPrintSessions(clientInfo, entries.map(entry => new Session(entry)));
+  let count = 0;
+  const runningSessions = new Set<string>();
+  const entries = registry.entryMap();
+  const key = clientKey(clientInfo);
+  for (const [workspaceKey, list] of entries) {
+    if (!all && workspaceKey !== key)
+      continue;
+    count += await gcAndPrintSessions(clientInfo, list.map(entry => new Session(entry)), all ? `${path.relative(process.cwd(), workspaceKey) || '/'}:` : undefined, runningSessions);
   }
+
+  // Filter out server entries that already have an attached session.
+  const serverEntries = await serverRegistry.list();
+  const filteredServerEntries = new Map<string, BrowserStatus[]>();
+  for (const [workspaceKey, list] of serverEntries) {
+    if (!all && workspaceKey !== key)
+      continue;
+    const unattached = list.filter(d => !runningSessions.has(d.title));
+    if (unattached.length)
+      filteredServerEntries.set(workspaceKey, unattached);
+  }
+
+  if (filteredServerEntries.size) {
+    if (count)
+      console.log('');
+    console.log('### Browser servers available for attach');
+  }
+  for (const [workspaceKey, list] of filteredServerEntries)
+    count += await gcAndPrintBrowserSessions(workspaceKey, list);
+
+  if (!count)
+    console.log('  (no browsers)');
 }
 
 async function gcAndPrintSessions(clientInfo: ClientInfo, sessions: Session[], header?: string, runningSessions?: Set<string>) {
@@ -397,13 +354,12 @@ async function gcAndPrintSessions(clientInfo: ClientInfo, sessions: Session[], h
   for (const session of stopped)
     console.log(await renderSessionStatus(clientInfo, session));
 
-  if (running.length === 0 && stopped.length === 0)
-    console.log('  (no browsers)');
+  return running.length + stopped.length;
 }
 
-async function gcAndPrintBrowserSessions(workspace: string, list: BrowserDescriptor[]) {
+async function gcAndPrintBrowserSessions(workspace: string, list: BrowserStatus[]): Promise<number> {
   if (!list.length)
-    return;
+    return 0;
 
   if (workspace)
     console.log(`${path.relative(process.cwd(), workspace) || '/'}:`);
@@ -413,12 +369,15 @@ async function gcAndPrintBrowserSessions(workspace: string, list: BrowserDescrip
     text.push(`- browser "${descriptor.title}":`);
     text.push(`  - browser: ${descriptor.browser.browserName}`);
     text.push(`  - version: v${descriptor.playwrightVersion}`);
-    text.push(`  - run \`playwright-cli open --attach "${descriptor.title}"\` to attach`);
+    text.push(`  - status: ${descriptor.canConnect ? 'open' : 'closed'}`);
+    if (descriptor.browser.userDataDir)
+      text.push(`  - data-dir: ${descriptor.browser.userDataDir}`);
+    else
+      text.push(`  - data-dir: <in-memory>`);
+    text.push(`  - run \`playwright-cli attach "${descriptor.title}"\` to attach`);
     console.log(text.join('\n'));
   }
-
-  if (!list.length)
-    console.log('  (no browsers)');
+  return list.length;
 }
 
 async function renderSessionStatus(clientInfo: ClientInfo, session: Session) {
@@ -432,6 +391,24 @@ async function renderSessionStatus(clientInfo: ClientInfo, session: Session) {
   if (config.browser)
     text.push(...renderResolvedConfig(config));
   return text.join('\n');
+}
+
+function validateFlags(args: MinimistArgs, command: { flags: Record<string, 'boolean' | 'string'>, help: string }) {
+  const unknownFlags: string[] = [];
+  for (const key of Object.keys(args)) {
+    if (key === '_')
+      continue;
+    if ((globalOptions as readonly string[]).includes(key))
+      continue;
+    if (!(key in command.flags))
+      unknownFlags.push(key);
+  }
+  if (unknownFlags.length) {
+    console.error(`Unknown option${unknownFlags.length > 1 ? 's' : ''}: ${unknownFlags.map(f => `--${f}`).join(', ')}`);
+    console.log('');
+    console.log(command.help);
+    process.exit(1);
+  }
 }
 
 export function calculateSha1(buffer: Buffer | string): string {

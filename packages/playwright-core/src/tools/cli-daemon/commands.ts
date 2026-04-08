@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { z } from '../../mcpBundle';
+import * as z from 'zod';
 import { declareCommand } from './command';
 
 import type { AnyCommandSchema } from './command';
@@ -51,14 +51,30 @@ const open = declareCommand({
   options: z.object({
     browser: z.string().optional().describe('Browser or chrome channel to use, possible values: chrome, firefox, webkit, msedge.'),
     config: z.string().optional().describe('Path to the configuration file, defaults to .playwright/cli.config.json'),
-    extension: z.boolean().optional().describe('Connect to browser extension'),
     headed: z.boolean().optional().describe('Run browser in headed mode'),
     persistent: z.boolean().optional().describe('Use persistent browser profile'),
     profile: z.string().optional().describe('Use persistent browser profile, store profile in specified directory.'),
-    attach: z.string().optional().describe('Attach to a running Playwright browser by name or endpoint'),
   }),
   toolName: ({ url }) => url ? 'browser_navigate' : 'browser_snapshot',
-  toolParams: ({ url }) => ({ url: url || 'about:blank' }),
+  toolParams: ({ url }) => url ? ({ url: url || 'about:blank' }) : { filename: '<auto>' },
+});
+
+const attach = declareCommand({
+  name: 'attach',
+  description: 'Attach to a running Playwright browser',
+  category: 'core',
+  args: z.object({
+    name: z.string().optional().describe('Bound browser name to attach to'),
+  }),
+  options: z.object({
+    cdp: z.string().optional().describe('Connect to an existing browser via CDP endpoint URL.'),
+    endpoint: z.string().optional().describe('Playwright browser server endpoint to attach to.'),
+    extension: z.union([z.boolean(), z.string()]).optional().describe('Connect to browser extension, optionally specify browser name (e.g. --extension=chrome)'),
+    config: z.string().optional().describe('Path to the configuration file, defaults to .playwright/cli.config.json'),
+    session: z.string().optional().describe('Session name (defaults to bound browser name or "default")'),
+  }),
+  toolName: 'browser_snapshot',
+  toolParams: () => ({ filename: '<auto>' }),
 });
 
 const close = declareCommand({
@@ -198,11 +214,11 @@ const mouseWheel = declareCommand({
   description: 'Scroll mouse wheel',
   category: 'mouse',
   args: z.object({
-    dx: numberArg.describe('Y delta'),
-    dy: numberArg.describe('X delta'),
+    dx: numberArg.describe('X delta'),
+    dy: numberArg.describe('Y delta'),
   }),
   toolName: 'browser_mouse_wheel',
-  toolParams: ({ dx: deltaY, dy: deltaX }) => ({ deltaY, deltaX }),
+  toolParams: ({ dx: deltaX, dy: deltaY }) => ({ deltaX, deltaY }),
 });
 
 // Core
@@ -333,9 +349,10 @@ const snapshot = declareCommand({
   }),
   options: z.object({
     filename: z.string().optional().describe('Save snapshot to markdown file instead of returning it in the response.'),
+    depth: numberArg.optional().describe('Limit snapshot depth, unlimited by default.'),
   }),
   toolName: 'browser_snapshot',
-  toolParams: ({ filename, element }) => ({ filename, selector: element }),
+  toolParams: ({ filename, element, depth }) => ({ filename, selector: element, depth }),
 });
 
 const evaluate = declareCommand({
@@ -346,8 +363,11 @@ const evaluate = declareCommand({
     func: z.string().describe('() => { /* code */ } or (element) => { /* code */ } when element is provided'),
     element: z.string().optional().describe('Exact target element reference from the page snapshot, or a unique element selector'),
   }),
+  options: z.object({
+    filename: z.string().optional().describe('Save evaluation result to a file instead of returning it in the response.'),
+  }),
   toolName: 'browser_evaluate',
-  toolParams: ({ func, element }) => ({ function: func, ...asRef(element) }),
+  toolParams: ({ func, element, filename }) => ({ function: func, filename, ...asRef(element) }),
 });
 
 const dialogAccept = declareCommand({
@@ -387,10 +407,13 @@ const runCode = declareCommand({
   description: 'Run Playwright code snippet',
   category: 'devtools',
   args: z.object({
-    code: z.string().describe('A JavaScript function containing Playwright code to execute. It will be invoked with a single argument, page, which you can use for any page interaction.'),
+    code: z.string().optional().describe('A JavaScript function containing Playwright code to execute. It will be invoked with a single argument, page, which you can use for any page interaction.'),
+  }),
+  options: z.object({
+    filename: z.string().optional().describe('Load code from the specified file.'),
   }),
   toolName: 'browser_run_code',
-  toolParams: ({ code }) => ({ code }),
+  toolParams: ({ code, filename }) => ({ code, filename }),
 });
 
 // Tabs
@@ -745,10 +768,13 @@ const networkRequests = declareCommand({
   args: z.object({}),
   options: z.object({
     static: z.boolean().optional().describe('Whether to include successful static resources like images, fonts, scripts, etc. Defaults to false.'),
+    ['request-body']: z.boolean().optional().describe('Whether to include request body. Defaults to false.'),
+    ['request-headers']: z.boolean().optional().describe('Whether to include request headers. Defaults to false.'),
+    filter: z.string().optional().describe('Only return requests whose URL matches this regexp (e.g. "/api/.*user").'),
     clear: z.boolean().optional().describe('Whether to clear the network list'),
   }),
   toolName: ({ clear }) => clear ? 'browser_network_clear' : 'browser_network_requests',
-  toolParams: ({ static: includeStatic, clear }) => clear ? ({}) : ({ includeStatic }),
+  toolParams: ({ static: s, 'request-body': requestBody, 'request-headers': requestHeaders, filter, clear }) => clear ? ({}) : ({ static: s, requestBody, requestHeaders, filter }),
 });
 
 const tracingStart = declareCommand({
@@ -773,20 +799,40 @@ const videoStart = declareCommand({
   name: 'video-start',
   description: 'Start video recording',
   category: 'devtools',
-  args: z.object({}),
+  args: z.object({
+    filename: z.string().optional().describe('Filename to save the video.'),
+  }),
+  options: z.object({
+    size: z.string().optional().describe('Video frame size, e.g. "800x600". If not specified, the size of the recorded video will fit 800x800.'),
+  }),
   toolName: 'browser_start_video',
-  toolParams: () => ({}),
+  toolParams: ({ filename, size }) => {
+    const parsedSize = size ? size.split('x').map(Number) : undefined;
+    return { filename, size: parsedSize ? { width: parsedSize[0], height: parsedSize[1] } : undefined };
+  }
 });
 
 const videoStop = declareCommand({
   name: 'video-stop',
   description: 'Stop video recording',
   category: 'devtools',
-  options: z.object({
-    filename: z.string().optional().describe('Filename to save the video.'),
-  }),
   toolName: 'browser_stop_video',
-  toolParams: ({ filename }) => ({ filename }),
+  toolParams: () => ({}),
+});
+
+const videoChapter = declareCommand({
+  name: 'video-chapter',
+  description: 'Add a chapter marker to the video recording',
+  category: 'devtools',
+  args: z.object({
+    title: z.string().describe('Chapter title.'),
+  }),
+  options: z.object({
+    description: z.string().optional().describe('Chapter description.'),
+    duration: numberArg.optional().describe('Duration in milliseconds to show the chapter card.'),
+  }),
+  toolName: 'browser_video_chapter',
+  toolParams: ({ title, description, duration }) => ({ title, description, duration }),
 });
 
 const devtoolsShow = declareCommand({
@@ -796,6 +842,35 @@ const devtoolsShow = declareCommand({
   args: z.object({}),
   toolName: '',
   toolParams: () => ({}),
+});
+
+const resume = declareCommand({
+  name: 'resume',
+  description: 'Resume the test execution',
+  category: 'devtools',
+  args: z.object({}),
+  toolName: 'browser_resume',
+  toolParams: ({ step }) => ({ step }),
+});
+
+const stepOver = declareCommand({
+  name: 'step-over',
+  description: 'Step over the next call in the test',
+  category: 'devtools',
+  args: z.object({}),
+  toolName: 'browser_resume',
+  toolParams: ({}) => ({ step: true }),
+});
+
+const pauseAt = declareCommand({
+  name: 'pause-at',
+  description: 'Run the test up to a specific location and pause there',
+  category: 'devtools',
+  args: z.object({
+    location: z.string().describe('Location to pause at. Format is <file>:<line>, e.g. "example.spec.ts:42".'),
+  }),
+  toolName: 'browser_resume',
+  toolParams: ({ location }) => ({ location }),
 });
 
 // Sessions
@@ -851,7 +926,7 @@ const install = declareCommand({
   category: 'install',
   args: z.object({}),
   options: z.object({
-    skills: z.boolean().optional().describe('Install skills for Claude / GitHub Copilot'),
+    skills: z.string().optional().describe('Install skills, possible values: claude (default), agents.'),
   }),
   toolName: '',
   toolParams: () => ({}),
@@ -888,6 +963,7 @@ const tray = declareCommand({
 const commandsArray: AnyCommandSchema[] = [
   // core category
   open,
+  attach,
   close,
   goto,
   type,
@@ -973,7 +1049,11 @@ const commandsArray: AnyCommandSchema[] = [
   tracingStop,
   videoStart,
   videoStop,
+  videoChapter,
   devtoolsShow,
+  pauseAt,
+  resume,
+  stepOver,
 
   // session category
   sessionList,

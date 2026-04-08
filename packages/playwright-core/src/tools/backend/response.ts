@@ -17,8 +17,8 @@
 import fs from 'fs';
 import path from 'path';
 
-import { debug } from '../../utilsBundle';
-import { renderModalStates, shouldIncludeMessage } from './tab';
+import debug from 'debug';
+import { renderModalStates } from './tab';
 import { scaleImageToFitMessage } from './screenshot';
 
 import type { TabHeader } from './tab';
@@ -45,21 +45,24 @@ export class Response {
   private _errors: string[] = [];
   private _code: string[] = [];
   private _context: Context;
-  private _includeSnapshot: 'none' | 'full' | 'incremental' = 'none';
+  private _includeSnapshot: 'none' | 'full' | 'explicit' = 'none';
   private _includeSnapshotFileName: string | undefined;
   private _includeSnapshotSelector: string | undefined;
+  private _includeSnapshotDepth: number | undefined;
   private _isClose: boolean = false;
 
   readonly toolName: string;
   readonly toolArgs: Record<string, any>;
   private _clientWorkspace: string;
   private _imageResults: { data: Buffer, imageType: 'png' | 'jpeg' }[] = [];
+  private _raw: boolean;
 
-  constructor(context: Context, toolName: string, toolArgs: Record<string, any>, relativeTo?: string) {
+  constructor(context: Context, toolName: string, toolArgs: Record<string, any>, options?: { relativeTo?: string, raw?: boolean }) {
     this._context = context;
     this.toolName = toolName;
     this.toolArgs = toolArgs;
-    this._clientWorkspace = relativeTo ?? context.options.cwd;
+    this._clientWorkspace = options?.relativeTo ?? context.options.cwd;
+    this._raw = options?.raw ?? false;
   }
 
   private _computRelativeTo(fileName: string): string {
@@ -86,7 +89,7 @@ export class Response {
   }
 
   async addResult(title: string, data: Buffer | string, file: FilenameTemplate) {
-    if (this._context.config.outputMode === 'file' || file.suggestedFilename || typeof data !== 'string') {
+    if (file.suggestedFilename || typeof data !== 'string') {
       const resolvedFile = await this.resolveClientFile(file, title);
       await this.addFileResult(resolvedFile, data);
     } else {
@@ -94,11 +97,15 @@ export class Response {
     }
   }
 
-  async addFileResult(resolvedFile: ResolvedFile, data: Buffer | string | null) {
+  private async _writeFile(resolvedFile: ResolvedFile, data: Buffer | string | null) {
     if (typeof data === 'string')
-      await fs.promises.writeFile(resolvedFile.fileName, data, 'utf-8');
+      await fs.promises.writeFile(resolvedFile.fileName, this._redactSecrets(data), 'utf-8');
     else if (data)
       await fs.promises.writeFile(resolvedFile.fileName, data);
+  }
+
+  async addFileResult(resolvedFile: ResolvedFile, data: Buffer | string | null) {
+    await this._writeFile(resolvedFile, data);
     this.addTextResult(resolvedFile.printableLink);
   }
 
@@ -124,40 +131,51 @@ export class Response {
   }
 
   setIncludeSnapshot() {
-    this._includeSnapshot = this._context.config.snapshot?.mode || 'incremental';
+    this._includeSnapshot = this._context.config.snapshot?.mode ?? 'full';
   }
 
-  setIncludeFullSnapshot(includeSnapshotFileName?: string, selector?: string) {
-    this._includeSnapshot = 'full';
+  setIncludeFullSnapshot(includeSnapshotFileName?: string, selector?: string, depth?: number) {
+    this._includeSnapshot = 'explicit';
     this._includeSnapshotFileName = includeSnapshotFileName;
+    this._includeSnapshotDepth = depth;
     this._includeSnapshotSelector = selector;
   }
 
-  async serialize(): Promise<CallToolResult> {
-    const redactText = (text: string): string => {
-      for (const [secretName, secretValue] of Object.entries(this._context.config.secrets ?? {}))
-        text = text.replaceAll(secretValue, `<secret>${secretName}</secret>`);
-      return text;
-    };
+  private _redactSecrets(text: string): string {
+    for (const [secretName, secretValue] of Object.entries(this._context.config.secrets ?? {})) {
+      if (!secretValue)
+        continue;
+      text = text.replaceAll(secretValue, `<secret>${secretName}</secret>`);
+    }
+    return text;
+  }
 
-    const sections = await this._build();
+
+  async serialize(): Promise<CallToolResult> {
+    const allSections = await this._build();
+    const rawSections = ['Error', 'Result', 'Snapshot'] as const;
+    const sections = this._raw ? allSections.filter(section => rawSections.includes(section.title as typeof rawSections[number])) : allSections;
 
     const text: string[] = [];
     for (const section of sections) {
       if (!section.content.length)
         continue;
-      text.push(`### ${section.title}`);
-      if (section.codeframe)
-        text.push(`\`\`\`${section.codeframe}`);
-      text.push(...section.content);
-      if (section.codeframe)
-        text.push('```');
+      if (!this._raw) {
+        text.push(`### ${section.title}`);
+        if (section.codeframe)
+          text.push(`\`\`\`${section.codeframe}`);
+        text.push(...section.content);
+        if (section.codeframe)
+          text.push('```');
+      } else {
+        text.push(...section.content);
+      }
     }
 
     const content: (TextContent | ImageContent)[] = [
       {
         type: 'text',
-        text: sanitizeUnicode(redactText(text.join('\n'))),
+        text: sanitizeUnicode(this._redactSecrets(text.join('\n'))),
       }
     ];
 
@@ -195,7 +213,7 @@ export class Response {
       addSection('Ran Playwright code', this._code, 'js');
 
     // Render tab titles upon changes or when more than one tab.
-    const tabSnapshot = this._context.currentTab() ? await this._context.currentTabOrDie().captureSnapshot(this._includeSnapshotSelector, this._clientWorkspace) : undefined;
+    const tabSnapshot = this._context.currentTab() ? await this._context.currentTabOrDie().captureSnapshot(this._includeSnapshotSelector, this._includeSnapshotDepth, this._clientWorkspace) : undefined;
     const tabHeaders = await Promise.all(this._context.tabs().map(tab => tab.headerSnapshot()));
     if (this._includeSnapshot !== 'none' || tabHeaders.some(header => header.changed)) {
       if (tabHeaders.length !== 1)
@@ -211,13 +229,13 @@ export class Response {
 
     // Handle tab snapshot
     if (tabSnapshot && this._includeSnapshot !== 'none') {
-      const snapshot = this._includeSnapshot === 'full' ? tabSnapshot.ariaSnapshot : tabSnapshot.ariaSnapshotDiff ?? tabSnapshot.ariaSnapshot;
-      if (this._context.config.outputMode === 'file' || this._includeSnapshotFileName) {
-        const resolvedFile = await this.resolveClientFile({ prefix: 'page', ext: 'yml', suggestedFilename: this._includeSnapshotFileName }, 'Snapshot');
-        await fs.promises.writeFile(resolvedFile.fileName, snapshot, 'utf-8');
+      if (this._includeSnapshot !== 'explicit' || this._includeSnapshotFileName) {
+        const suggestedFilename = this._includeSnapshotFileName === '<auto>' ? undefined : this._includeSnapshotFileName;
+        const resolvedFile = await this.resolveClientFile({ prefix: 'page', ext: 'yml', suggestedFilename }, 'Snapshot');
+        await this._writeFile(resolvedFile, tabSnapshot.ariaSnapshot);
         addSection('Snapshot', [resolvedFile.printableLink]);
       } else {
-        addSection('Snapshot', [snapshot], 'yaml');
+        addSection('Snapshot', [tabSnapshot.ariaSnapshot], 'yaml');
       }
     }
 
@@ -227,18 +245,22 @@ export class Response {
       text.push(`- New console entries: ${tabSnapshot.consoleLink}`);
     if (tabSnapshot?.events.filter(event => event.type !== 'request').length) {
       for (const event of tabSnapshot.events) {
-        if (event.type === 'console' && this._context.config.outputMode !== 'file' && this._context.config.snapshot?.mode !== 'none') {
-          if (shouldIncludeMessage(this._context.config.console?.level, event.message.type))
-            text.push(`- ${trimMiddle(event.message.toString(), 100)}`);
-        } else if (event.type === 'download-start') {
+        if (event.type === 'download-start')
           text.push(`- Downloading file ${event.download.download.suggestedFilename()} ...`);
-        } else if (event.type === 'download-finish') {
+        else if (event.type === 'download-finish')
           text.push(`- Downloaded file ${event.download.download.suggestedFilename()} to "${this._computRelativeTo(event.download.outputFile)}"`);
-        }
       }
     }
     if (text.length)
       addSection('Events', text);
+
+    const pausedDetails = this._context.debugger().pausedDetails();
+    if (pausedDetails) {
+      addSection('Paused', [
+        `- ${pausedDetails.title} at ${this._computRelativeTo(pausedDetails.location.file)}${pausedDetails.location.line ? ':' + pausedDetails.location.line : ''}`,
+        '- Use any tools to explore and interact, resume by calling resume/step-over/pause-at',
+      ]);
+    }
     return sections;
   }
 }
@@ -265,20 +287,12 @@ export function renderTabsMarkdown(tabs: TabHeader[]): string[] {
   return lines;
 }
 
-function trimMiddle(text: string, maxLength: number) {
-  if (text.length <= maxLength)
-    return text;
-  return text.slice(0, Math.floor(maxLength / 2)) + '...' + text.slice(- 3 - Math.floor(maxLength / 2));
-}
-
 /**
  * Sanitizes a string to ensure it only contains well-formed Unicode.
  * Replaces lone surrogates with U+FFFD using String.prototype.toWellFormed().
  */
 function sanitizeUnicode(text: string): string {
-  if ((String.prototype as any).toWellFormed)
-    return text.toWellFormed();
-  return text;
+  return text.toWellFormed?.() ?? text;
 }
 
 function parseSections(text: string): Map<string, string> {
@@ -298,7 +312,7 @@ function parseSections(text: string): Map<string, string> {
   return sections;
 }
 
-export function parseResponse(response: CallToolResult) {
+export function parseResponse(response: CallToolResult, cwd?: string) {
   if (response.content?.[0].type !== 'text')
     return undefined;
   const text = response.content[0].text;
@@ -309,12 +323,29 @@ export function parseResponse(response: CallToolResult) {
   const code = sections.get('Ran Playwright code');
   const tabs = sections.get('Open tabs');
   const page = sections.get('Page');
-  const snapshot = sections.get('Snapshot');
+  const snapshotSection = sections.get('Snapshot');
   const events = sections.get('Events');
   const modalState = sections.get('Modal state');
+  const paused = sections.get('Paused');
   const codeNoFrame = code?.replace(/^```js\n/, '').replace(/\n```$/, '');
   const isError = response.isError;
   const attachments = response.content.length > 1 ? response.content.slice(1) : undefined;
+
+  let snapshot: string | undefined;
+  let inlineSnapshot: string | undefined;
+  if (snapshotSection) {
+    const match = snapshotSection.match(/\[Snapshot\]\(([^)]+)\)/);
+    if (match) {
+      if (cwd) {
+        try {
+          snapshot = fs.readFileSync(path.resolve(cwd, match[1]), 'utf-8');
+        } catch {
+        }
+      }
+    } else {
+      inlineSnapshot = snapshotSection.replace(/^```yaml\n?/, '').replace(/\n?```$/, '');
+    }
+  }
 
   return {
     result,
@@ -323,8 +354,10 @@ export function parseResponse(response: CallToolResult) {
     tabs,
     page,
     snapshot,
+    inlineSnapshot,
     events,
     modalState,
+    paused,
     isError,
     attachments,
     text,

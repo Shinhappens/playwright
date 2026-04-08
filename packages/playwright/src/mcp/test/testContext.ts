@@ -18,9 +18,12 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import { noColors, escapeRegExp, ManualPromise, toPosixPath } from 'playwright-core/lib/utils';
-import { parseResponse } from 'playwright-core/lib/tools/exports';
-import { debug } from 'playwright-core/lib/utilsBundle';
+import { tools } from 'playwright-core/lib/coreBundle';
+import debug from 'debug';
+import { noColors } from '@isomorphic/colors';
+import { ManualPromise } from '@isomorphic/manualPromise';
+import { escapeRegExp } from '@isomorphic/stringUtils';
+import { toPosixPath } from '@utils/fileUtils';
 
 import { terminalScreen } from '../../reporters/base';
 import ListReporter from '../../reporters/list';
@@ -33,7 +36,6 @@ import { resolveConfigLocation } from '../../common/configLoader';
 import type { TerminalScreen } from '../../reporters/base';
 import type { FullResultStatus, RunTestsParams } from '../../runner/testRunner';
 import type { ConfigLocation } from '../../common/config';
-import type { ClientInfo } from 'playwright-core/lib/tools/exports';
 import type { BrowserMCPRequest, BrowserMCPResponse } from './browserBackend';
 
 export type SeedFile = {
@@ -88,14 +90,14 @@ type TestRunnerAndScreen = {
 };
 
 export class TestContext {
-  private _clientInfo: ClientInfo;
+  private _clientInfo: tools.ClientInfo;
   private _testRunnerAndScreen: TestRunnerAndScreen | undefined;
   readonly computedHeaded: boolean;
   private readonly _configLocation: ConfigLocation;
   readonly rootPath: string;
   generatorJournal: GeneratorJournal | undefined;
 
-  constructor(clientInfo: ClientInfo, configPath: string | undefined, options?: { muteConsole?: boolean, headless?: boolean }) {
+  constructor(clientInfo: tools.ClientInfo, configPath: string | undefined, options?: { muteConsole?: boolean, headless?: boolean }) {
     this._clientInfo = clientInfo;
 
     this._configLocation = resolveConfigLocation(configPath || clientInfo.cwd);
@@ -261,7 +263,7 @@ export class TestContext {
     if (result.error)
       throw new Error(result.error.message);
     if (typeof request?.callTool?.arguments?.['intent'] === 'string') {
-      const response = parseResponse(result.response.callTool!);
+      const response = tools.parseResponse(result.response.callTool!);
       if (response && !response.isError && response.code)
         this.generatorJournal?.logStep(request.callTool.arguments['intent'], response.code);
     }

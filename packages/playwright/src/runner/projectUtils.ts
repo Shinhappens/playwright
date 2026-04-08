@@ -18,8 +18,8 @@ import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
 
-import { escapeRegExp } from 'playwright-core/lib/utils';
-import { minimatch } from 'playwright-core/lib/utilsBundle';
+import minimatch from 'minimatch';
+import { escapeRegExp } from '@isomorphic/stringUtils';
 
 import { createFileMatcher } from '../util';
 
@@ -145,7 +145,7 @@ export function buildDependentProjects(forProjects: FullProjectInternal[], proje
 }
 
 export async function collectFilesForProject(project: FullProjectInternal, fsCache = new Map<string, string[]>()): Promise<string[]> {
-  const extensions = new Set(['.js', '.ts', '.mjs', '.mts', '.cjs', '.cts', '.jsx', '.tsx', '.mjsx', '.mtsx', '.cjsx', '.ctsx', '.md']);
+  const extensions = new Set(['.js', '.ts', '.mjs', '.mts', '.cjs', '.cts', '.jsx', '.tsx', '.mjsx', '.mtsx', '.cjsx', '.ctsx']);
   const testFileExtension = (file: string) => extensions.has(path.extname(file));
   const allFiles = await cachedCollectFiles(project.project.testDir, project.respectGitIgnore, fsCache);
   const testMatch = createFileMatcher(project.project.testMatch);

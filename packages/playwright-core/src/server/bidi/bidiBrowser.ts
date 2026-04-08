@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { eventsHelper } from '../utils/eventsHelper';
+import { eventsHelper } from '@utils/eventsHelper';
 import { Browser } from '../browser';
 import { BrowserContext, verifyGeolocation } from '../browserContext';
 import * as network from '../network';
@@ -24,7 +24,7 @@ import { BidiPage, kPlaywrightBindingChannel } from './bidiPage';
 import { PageBinding } from '../page';
 import * as bidi from './third_party/bidiProtocol';
 
-import type { RegisteredListener } from '../utils/eventsHelper';
+import type { RegisteredListener } from '@utils/eventsHelper';
 import type { BrowserOptions } from '../browser';
 import type { SdkObject } from '../instrumentation';
 import type { InitScript, Page } from '../page';
@@ -41,6 +41,7 @@ export class BidiBrowser extends Browser {
   readonly _contexts = new Map<string, BidiBrowserContext>();
   readonly _bidiPages = new Map<bidi.BrowsingContext.BrowsingContext, BidiPage>();
   private readonly _eventListeners: RegisteredListener[];
+  private _cacheBehavior: bidi.Network.SetCacheBehaviorParameters['cacheBehavior'] = 'default';
 
   static async connect(parent: SdkObject, transport: ConnectionTransport, options: BrowserOptions): Promise<BidiBrowser> {
     const browser = new BidiBrowser(parent, transport, options);
@@ -74,6 +75,8 @@ export class BidiBrowser extends Browser {
       ],
     });
 
+    await browser._browserSession.send('network.addIntercept', { phases: [bidi.Network.InterceptPhase.AuthRequired] });
+
     await browser._browserSession.send('network.addDataCollector', {
       dataTypes: [bidi.Network.DataType.Response],
       maxEncodedDataSize: 20_000_000, // same default as in CDP: https://source.chromium.org/chromium/chromium/src/+/main:third_party/blink/renderer/core/inspector/inspector_network_agent.cc;l=134;drc=4128411589187a396829a827f59a655bed876aa7
@@ -82,7 +85,7 @@ export class BidiBrowser extends Browser {
     if (options.persistent) {
       const context = new BidiBrowserContext(browser, undefined, options.persistent);
       browser._defaultContext = context;
-      await context._initialize();
+      await context.initialize();
       // Create default page as we cannot get access to the existing one.
       const page = await browser._defaultContext.doCreateNewPage();
       await page.waitForInitializedOrError();
@@ -101,7 +104,7 @@ export class BidiBrowser extends Browser {
   }
 
   _onDisconnect() {
-    this._didClose();
+    this.didClose();
   }
 
   async doCreateNewContext(options: types.BrowserContextOptions): Promise<BrowserContext> {
@@ -111,7 +114,7 @@ export class BidiBrowser extends Browser {
       proxy: getProxyConfiguration(proxy),
     });
     const context = new BidiBrowserContext(this, userContext, options);
-    await context._initialize();
+    await context.initialize();
     this._contexts.set(userContext, context);
     return context;
   }
@@ -130,6 +133,14 @@ export class BidiBrowser extends Browser {
 
   isConnected(): boolean {
     return !this._connection.isClosed();
+  }
+
+  async updateCacheBehavior() {
+    const cacheBehavior = [...this._contexts.values()].some(context => context.requestInterceptors.length > 0) ? 'bypass' : 'default';
+    if (this._cacheBehavior !== cacheBehavior) {
+      await this._browserSession.send('network.setCacheBehavior', { cacheBehavior });
+      this._cacheBehavior = cacheBehavior;
+    }
   }
 
   private _onBrowsingContextCreated(event: bidi.BrowsingContext.Info) {
@@ -204,16 +215,16 @@ export class BidiBrowserContext extends BrowserContext {
 
   constructor(browser: BidiBrowser, browserContextId: string | undefined, options: types.BrowserContextOptions) {
     super(browser, options, browserContextId);
-    this._authenticateProxyViaHeader();
+    this.authenticateProxyViaHeader();
   }
 
   private _bidiPages() {
     return [...this._browser._bidiPages.values()].filter(bidiPage => bidiPage._browserContext === this);
   }
 
-  override async _initialize() {
+  override async initialize() {
     const promises: Promise<any>[] = [
-      super._initialize(),
+      super.initialize(),
     ];
     const downloadBehavior: bidi.Browser.DownloadBehavior = this._options.acceptDownloads === 'accept' ?
       { type: 'allowed', destinationFolder: this._browser.options.downloadsPath } :
@@ -284,7 +295,7 @@ export class BidiBrowserContext extends BrowserContext {
 
   async addCookies(cookies: channels.SetNetworkCookie[]) {
     cookies = network.rewriteCookies(cookies);
-    const promises = cookies.map((c: channels.SetNetworkCookie) => {
+    const promises = cookies.map(async (c: channels.SetNetworkCookie) => {
       const cookie: bidi.Storage.PartialCookie = {
         name: c.name,
         value: { type: 'string', value: c.value },
@@ -295,8 +306,13 @@ export class BidiBrowserContext extends BrowserContext {
         sameSite: c.sameSite && toBidiSameSite(c.sameSite),
         expiry: (c.expires === -1 || c.expires === undefined) ? undefined : Math.round(c.expires),
       };
-      return this._browser._browserSession.send('storage.setCookie',
-          { cookie, partition: { type: 'storageKey', userContext: this._browserContextId, sourceOrigin: c.partitionKey } });
+      try {
+        return await this._browser._browserSession.send('storage.setCookie',
+            { cookie, partition: { type: 'storageKey', userContext: this._browserContextId, sourceOrigin: c.partitionKey } });
+      } catch (e) {
+        if (!e.message.startsWith('Protocol error (storage.setCookie): unable to set cookie'))
+          throw e;
+      }
     });
     await Promise.all(promises);
   }
@@ -415,18 +431,18 @@ export class BidiBrowserContext extends BrowserContext {
   }
 
   async doUpdateRequestInterception(): Promise<void> {
+    let interceptPromise = Promise.resolve<any>(undefined);
     if (this.requestInterceptors.length > 0 && !this._interceptId) {
-      const { intercept } = await this._browser._browserSession.send('network.addIntercept', {
+      interceptPromise = this._browser._browserSession.send('network.addIntercept', {
         phases: [bidi.Network.InterceptPhase.BeforeRequestSent],
-        urlPatterns: [{ type: 'pattern' }],
-      });
-      this._interceptId = intercept;
+      }).then(({ intercept }) => this._interceptId = intercept);
     }
     if (this.requestInterceptors.length === 0 && this._interceptId) {
       const intercept = this._interceptId;
       this._interceptId = undefined;
-      await this._browser._browserSession.send('network.removeIntercept', { intercept });
+      interceptPromise = this._browser._browserSession.send('network.removeIntercept', { intercept });
     }
+    await Promise.all([this._browser.updateCacheBehavior(), interceptPromise]);
   }
 
   override async doUpdateDefaultViewport() {
@@ -496,15 +512,15 @@ export class BidiBrowserContext extends BrowserContext {
   override async clearCache(): Promise<void> {
   }
 
-  async doClose(reason: string | undefined) {
+  async doClose(reason: string | undefined): Promise<void | 'close-browser'> {
     if (!this._browserContextId) {
       // Closing persistent context should close the browser.
-      await this._browser.close({ reason });
-      return;
+      return 'close-browser';
     }
     await this._browser._browserSession.send('browser.removeUserContext', {
       userContext: this._browserContextId
     });
+    await Promise.all(this._bidiPages().map(bidiPage => bidiPage._page.closedPromise));
     this._browser._contexts.delete(this._browserContextId);
   }
 

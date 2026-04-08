@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { stringifyStackFrames } from 'playwright-core/lib/utils';
+import { stringifyStackFrames } from '@isomorphic/stackTrace';
 
 import type { StackFrame } from '@protocol/channels';
 

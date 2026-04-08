@@ -91,8 +91,8 @@ it('should work for different console API calls', async ({ page }) => {
   ]);
 });
 
-it('should format the message correctly with time/timeLog/timeEnd', async ({ page, browserName }) => {
-  it.fixme(browserName === 'firefox', 'https://github.com/microsoft/playwright/issues/10580');
+it('should format the message correctly with time/timeLog/timeEnd', async ({ page, browserName, isBidi }) => {
+  it.fixme(browserName === 'firefox' && !isBidi, 'https://github.com/microsoft/playwright/issues/10580');
   const messages = [];
   page.on('console', msg => messages.push(msg));
   await page.evaluate(async () => {
@@ -107,6 +107,8 @@ it('should format the message correctly with time/timeLog/timeEnd', async ({ pag
     expect(messages[0].type()).toBe('timeEnd');
   else if (browserName === 'chromium')
     expect(messages[0].type()).toBe('log');
+  else if (browserName === 'firefox')
+    expect(messages[0].type()).toBe('timeLog');
   expect(messages[1].type()).toBe('timeEnd');
 
   // WebKit has a space before the unit: https://bugs.webkit.org/show_bug.cgi?id=233556
@@ -301,7 +303,7 @@ it('clearConsoleMessages should work', async ({ page }) => {
   expect(messages[0].text()).toBe('message3');
 });
 
-it('consoleMessages sinceNavigation filter should work', async ({ page, server }) => {
+it('consoleMessages since-navigation filter should work', async ({ page, server }) => {
   await page.evaluate(() => console.log('before navigation'));
   await page.goto(server.EMPTY_PAGE);
   await page.evaluate(() => console.log('after navigation'));
@@ -310,13 +312,13 @@ it('consoleMessages sinceNavigation filter should work', async ({ page, server }
   expect(all.map(m => m.text())).toContain('before navigation');
   expect(all.map(m => m.text())).toContain('after navigation');
 
-  // sinceNavigation is the default
+  // since-navigation is the default
   const sinceNav = await page.consoleMessages();
   expect(sinceNav.map(m => m.text())).not.toContain('before navigation');
   expect(sinceNav.map(m => m.text())).toContain('after navigation');
 });
 
-it('pageErrors sinceNavigation filter should work', async ({ page, server }) => {
+it('pageErrors since-navigation filter should work', async ({ page, server }) => {
   server.setContent('/page1', `<script>throw new Error('page1 error');</script>`, 'text/html');
   server.setContent('/page2', `<script>throw new Error('page2 error');</script>`, 'text/html');
 
@@ -327,7 +329,7 @@ it('pageErrors sinceNavigation filter should work', async ({ page, server }) => 
   expect(all.map(e => e.message)).toContain('page1 error');
   expect(all.map(e => e.message)).toContain('page2 error');
 
-  // sinceNavigation is the default
+  // since-navigation is the default
   const sinceNav = await page.pageErrors();
   expect(sinceNav.map(e => e.message)).not.toContain('page1 error');
   expect(sinceNav.map(e => e.message)).toContain('page2 error');

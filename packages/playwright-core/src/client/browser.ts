@@ -35,7 +35,6 @@ export class Browser extends ChannelOwner<channels.BrowserChannel> implements ap
   _shouldCloseConnectionOnClose = false;
   _browserType!: BrowserType;
   private _options: LaunchOptions = {};
-  private _userDataDir: string | undefined;
   readonly _name: string;
   readonly _browserName: 'chromium' | 'webkit' | 'firefox';
   private _path: string | undefined;
@@ -92,13 +91,12 @@ export class Browser extends ChannelOwner<channels.BrowserChannel> implements ap
     return context;
   }
 
-  _connectToBrowserType(browserType: BrowserType, browserOptions: LaunchOptions, logger: Logger | undefined, userDataDir?: string) {
+  _connectToBrowserType(browserType: BrowserType, browserOptions: LaunchOptions, logger: Logger | undefined) {
     // Note: when using connect(), `browserType` is different from `this._parent`.
     // This is why browser type is not wired up in the constructor,
     // and instead this separate method is called later on.
     this._browserType = browserType;
     this._options = browserOptions;
-    this._userDataDir = userDataDir;
     this._logger = logger;
     for (const context of this._contexts)
       this._setupBrowserContext(context);
@@ -130,12 +128,12 @@ export class Browser extends ChannelOwner<channels.BrowserChannel> implements ap
     return this._initializer.version;
   }
 
-  async _register(title: string, options: { workspaceDir?: string, metadata?: Record<string, any>, wsPath?: string } = {}): Promise<{ pipeName: string }> {
-    const { pipeName } = await this._channel.startServer({ title, ...options });
-    return { pipeName };
+  async bind(title: string, options: { workspaceDir?: string, metadata?: Record<string, any>, host?: string, port?: number } = {}): Promise<{ endpoint: string }> {
+    const { endpoint } = await this._channel.startServer({ title, ...options });
+    return { endpoint };
   }
 
-  async _unregister(): Promise<void> {
+  async unbind(): Promise<void> {
     await this._channel.stopServer();
   }
 
@@ -151,14 +149,6 @@ export class Browser extends ChannelOwner<channels.BrowserChannel> implements ap
 
   isConnected(): boolean {
     return this._isConnected;
-  }
-
-  launchOptions(): LaunchOptions {
-    return this._options;
-  }
-
-  userDataDir(): string | null {
-    return this._userDataDir ?? null;
   }
 
   async newBrowserCDPSession(): Promise<api.CDPSession> {

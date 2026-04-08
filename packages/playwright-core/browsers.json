@@ -3,49 +3,49 @@
   "browsers": [
     {
       "name": "chromium",
-      "revision": "1214",
+      "revision": "1219",
       "installByDefault": true,
-      "browserVersion": "146.0.7680.31",
+      "browserVersion": "147.0.7727.49",
       "title": "Chrome for Testing"
     },
     {
       "name": "chromium-headless-shell",
-      "revision": "1214",
+      "revision": "1219",
       "installByDefault": true,
-      "browserVersion": "146.0.7680.31",
+      "browserVersion": "147.0.7727.49",
       "title": "Chrome Headless Shell"
     },
     {
       "name": "chromium-tip-of-tree",
-      "revision": "1410",
+      "revision": "1419",
       "installByDefault": false,
-      "browserVersion": "147.0.7714.0",
+      "browserVersion": "148.0.7768.0",
       "title": "Chrome Canary for Testing"
     },
     {
       "name": "chromium-tip-of-tree-headless-shell",
-      "revision": "1410",
+      "revision": "1419",
       "installByDefault": false,
-      "browserVersion": "147.0.7714.0",
+      "browserVersion": "148.0.7768.0",
       "title": "Chrome Canary Headless Shell"
     },
     {
       "name": "firefox",
-      "revision": "1509",
+      "revision": "1511",
       "installByDefault": true,
-      "browserVersion": "146.0.1",
+      "browserVersion": "148.0.2",
       "title": "Firefox"
     },
     {
       "name": "firefox-beta",
-      "revision": "1504",
+      "revision": "1505",
       "installByDefault": false,
-      "browserVersion": "146.0b8",
+      "browserVersion": "148.0b9",
       "title": "Firefox Beta"
     },
     {
       "name": "webkit",
-      "revision": "2269",
+      "revision": "2276",
       "installByDefault": true,
       "revisionOverrides": {
         "mac14": "2251",
@@ -55,7 +55,7 @@
         "ubuntu20.04-x64": "2092",
         "ubuntu20.04-arm64": "2092"
       },
-      "browserVersion": "26.0",
+      "browserVersion": "26.4",
       "title": "WebKit"
     },
     {

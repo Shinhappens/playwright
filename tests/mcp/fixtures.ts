@@ -24,8 +24,9 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { ListRootsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { TestServer } from '../config/testserver';
 import { serverFixtures } from '../config/serverFixtures';
-import { parseResponse } from '../../packages/playwright-core/lib/tools/backend/response';
+import { tools } from '../../packages/playwright-core/lib/coreBundle';
 import { commonFixtures } from '../config/commonFixtures';
+import { inheritAndCleanEnv } from '../config/utils';
 
 import type { CommonFixtures, CommonWorkerFixtures } from '../config/commonFixtures';
 import type { Config } from '../../packages/playwright-core/src/tools/mcp/config.d';
@@ -34,7 +35,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { Stream } from 'stream';
 import type { ServerFixtures, ServerWorkerOptions } from '../config/serverFixtures';
 
-export { parseResponse };
+export const { parseResponse } = tools;
 
 export type TestOptions = {
   mcpArgs: string[] | undefined;
@@ -134,11 +135,10 @@ export const test = serverTest.extend<TestFixtures & TestOptions, WorkerFixtures
           };
         });
       }
-      const env = {
-        ...process.env,
+      const env = inheritAndCleanEnv({
         PW_TMPDIR_FOR_TEST: testInfo.outputPath('tmp'),
         ...options?.env
-      };
+      });
       const { transport, stderr } = await createTransport(mcpServerType, { args, env, cwd: options?.cwd || test.info().outputPath() });
       let stderrBuffer = '';
       stderr?.on('data', data => {
@@ -235,7 +235,7 @@ type Response = Awaited<ReturnType<Client['callTool']>>;
 
 export const expect = baseExpect.extend({
   toHaveResponse(response: Response, object: any) {
-    const parsed = parseResponse(response);
+    const parsed = tools.parseResponse(response, test.info().outputPath());
     const text = parsed.text;
     const isNot = this.isNot;
 
@@ -290,7 +290,7 @@ export const expect = baseExpect.extend({
   },
 });
 
-export const mcpServerPath = [require.resolve('../../packages/playwright-core/lib/tools/mcp/cli-stub.js')];
+export const mcpServerPath = [require.resolve('../../packages/playwright-core/lib/entry/mcp.js')];
 export const testMcpServerPath = [require.resolve('../../packages/playwright-test/cli.js'), 'run-test-mcp-server'];
 
 type Files = { [key: string]: string | Buffer };
@@ -348,4 +348,9 @@ export function formatLog(stderr: string) {
   for (const line of lines)
     object[line] = (object[line] || 0) + 1;
   return object;
+}
+
+export async function consoleEntries(response: any) {
+  const file = response.events?.match(/New console entries: (.+\.log)(#L\d+)?/)?.[1];
+  return await fs.promises.readFile(test.info().outputPath(file), 'utf-8');
 }

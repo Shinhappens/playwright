@@ -1,0 +1,14 @@
+[*]
+../../package.ts
+@isomorphic/**
+@utils/**
+./*.ts
+
+[traceSnapshot.ts]
+../../inprocess.ts
+../../utils
+../backend/browserBackend.ts
+../backend/tools.ts
+../cli-daemon/command.ts
+../cli-daemon/commands.ts
+../cli-client/minimist.ts

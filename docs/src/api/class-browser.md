@@ -158,14 +158,6 @@ System.Console.WriteLine(browser.Contexts.Count); // prints "1"
 
 Indicates that the browser is connected.
 
-## method: Browser.launchOptions
-* since: v1.59
-* langs: js
-- returns: <[Object]>
-
-Returns the launch options that were used to launch this browser. The return type matches the options
-accepted by [`method: BrowserType.launch`].
-
 ## async method: Browser.newBrowserCDPSession
 * since: v1.11
 - returns: <[CDPSession]>
@@ -303,6 +295,44 @@ testing frameworks should explicitly create [`method: Browser.newContext`] follo
 ### option: Browser.newPage.storageStatePath = %%-csharp-java-context-option-storage-state-path-%%
 * since: v1.9
 
+## async method: Browser.bind
+* since: v1.59
+- returns: <[Object]>
+  - `endpoint` <[string]>
+
+Binds the browser to a named pipe or web socket, making it available for other clients to connect to.
+
+### param: Browser.bind.title
+* since: v1.59
+- `title` <[string]>
+
+Title of the browser server, used for identification.
+
+### option: Browser.bind.workspaceDir
+* since: v1.59
+- `workspaceDir` <[string]>
+
+Working directory associated with this browser server.
+
+### option: Browser.bind.metadata
+* since: v1.59
+* langs: js
+- `metadata` <[Object]<[string], [any]>>
+
+Additional metadata to associate with the browser server.
+
+### option: Browser.bind.host
+* since: v1.59
+- `host` <[string]>
+
+Host to bind the web socket server to. When specified, a web socket server is created instead of a named pipe.
+
+### option: Browser.bind.port
+* since: v1.59
+- `port` <[int]>
+
+Port to bind the web socket server to. When specified, a web socket server is created instead of a named pipe. Use `0` to let the OS pick an available port.
+
 ## async method: Browser.removeAllListeners
 * since: v1.47
 * langs: js
@@ -390,13 +420,10 @@ This API controls [Chromium Tracing](https://www.chromium.org/developers/how-tos
 
 Returns the buffer with trace data.
 
-## method: Browser.userDataDir
+## async method: Browser.unbind
 * since: v1.59
-* langs: js
-- returns: <[null]|[string]>
 
-Returns the user data directory that the browser was launched with, or `null` if the browser was
-launched without a persistent context.
+Unbinds the browser server previously bound with [`method: Browser.bind`].
 
 ## method: Browser.version
 * since: v1.8

@@ -16,16 +16,14 @@
  */
 
 import fs from 'fs';
-import path from 'path';
 
-import { createGuid } from './utils/crypto';
-import { debugMode } from './utils/debug';
+import { rewriteErrorMessage } from '@isomorphic/stackTrace';
+import { createGuid } from '@utils/crypto';
+import { debugMode, isUnderTest } from '@utils/debug';
 import { Clock } from './clock';
 import { Debugger } from './debugger';
 import { DialogManager } from './dialog';
 import { BrowserContextAPIRequestContext } from './fetch';
-import { mkdirIfNeeded } from './utils/fileUtils';
-import { rewriteErrorMessage } from '../utils/isomorphic/stackTrace';
 import { HarRecorder } from './har/harRecorder';
 import { helper } from './helper';
 import { EventMap, SdkObject } from './instrumentation';
@@ -36,6 +34,7 @@ import { RecorderApp } from './recorder/recorderApp';
 import { Selectors } from './selectors';
 import { Tracing } from './trace/recorder/tracing';
 import * as rawStorageSource from '../generated/storageScriptSource';
+import { nullProgress } from './progress';
 
 import type { Artifact } from './artifact';
 import type { Browser, BrowserOptions } from './browser';
@@ -143,30 +142,33 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
     return this._selectors;
   }
 
-  async _initialize() {
+  async initialize() {
     if (this.attribution.playwright.options.isInternalPlaywright)
       return;
     // Debugger will pause execution upon page.pause in headed mode.
     this._debugger = new Debugger(this);
 
-    // When PWDEBUG=1, show inspector for each context.
-    if (debugMode() === 'inspector')
-      await RecorderApp.show(this, { pauseOnNextStatement: true });
-
     // When paused, show inspector.
-    if (this._debugger.isPaused())
-      RecorderApp.showInspectorNoReply(this);
+    const shouldEnableDebugger = !this.attribution.playwright.options.isServer && (isUnderTest() || !!this._browser.options.headful);
+    if (shouldEnableDebugger) {
+      this._debugger.setPauseAt();
+      this._debugger.on(Debugger.Events.PausedStateChanged, () => {
+        if (this._debugger.isPaused())
+          RecorderApp.showInspectorNoReply(this);
+      });
+    }
 
-    this._debugger.on(Debugger.Events.PausedStateChanged, () => {
-      if (this._debugger.isPaused())
-        RecorderApp.showInspectorNoReply(this);
-    });
+    // When PWDEBUG=1, show inspector for each context.
+    if (debugMode() === 'inspector') {
+      this._debugger.setPauseAt({ next: true });
+      await RecorderApp.show(this, { pauseOnNextStatement: true });
+    }
 
     if (debugMode() === 'console')
-      await this.exposeConsoleApi();
+      await this._exposeConsoleApi();
 
     if (this._options.serviceWorkers === 'block')
-      await this.addInitScript(`\nif (navigator.serviceWorker) navigator.serviceWorker.register = async () => { console.warn('Service Worker registration blocked by Playwright'); };\n`);
+      await this.addInitScript(nullProgress, `\nif (navigator.serviceWorker) navigator.serviceWorker.register = async () => { console.warn('Service Worker registration blocked by Playwright'); };\n`);
 
     if (this._options.permissions)
       await this.grantPermissions(this._options.permissions);
@@ -176,7 +178,11 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
     return this._debugger;
   }
 
-  async exposeConsoleApi() {
+  async exposeConsoleApi(progress: Progress) {
+    await progress.race(this._exposeConsoleApi());
+  }
+
+  private async _exposeConsoleApi() {
     if (this._consoleApiExposed)
       return;
     this._consoleApiExposed = true;
@@ -184,11 +190,6 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
       function installConsoleApi(injectedScript) { injectedScript.consoleApi.install(); }
       module.exports = { default: () => installConsoleApi };
     `);
-  }
-
-  async _ensureVideosPath() {
-    if (this._options.recordVideo)
-      await mkdirIfNeeded(path.join(this._options.recordVideo.dir, 'dummy'));
   }
 
   canResetForReuse(): boolean {
@@ -228,9 +229,9 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
     let page: Page | undefined = this.pages()[0];
     const otherPages = this.possiblyUninitializedPages().filter(p => p !== page);
     for (const p of otherPages)
-      await p.close();
+      await p.close(progress);
     if (page && page.hasCrashed()) {
-      await page.close();
+      await page.close(progress);
       page = undefined;
     }
 
@@ -248,7 +249,7 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
     await page?.resetForReuse(progress);
   }
 
-  _browserClosed() {
+  browserClosed() {
     for (const page of this.pages())
       page._didClose();
     this._didCloseInternal();
@@ -293,17 +294,21 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
   protected abstract doUpdateDefaultViewport(): Promise<void>;
   protected abstract doUpdateDefaultEmulatedMedia(): Promise<void>;
   protected abstract doExposePlaywrightBinding(): Promise<void>;
-  protected abstract doClose(reason: string | undefined): Promise<void>;
+  protected abstract doClose(reason: string | undefined): Promise<void | 'close-browser'>;
   protected abstract onClosePersistent(): void;
 
-  async cookies(urls: string | string[] | undefined = []): Promise<channels.NetworkCookie[]> {
+  async cookies(progress: Progress, urls: string | string[] | undefined = []): Promise<channels.NetworkCookie[]> {
+    return await progress.race(this._cookies(urls));
+  }
+
+  private async _cookies(urls: string | string[] | undefined = []): Promise<channels.NetworkCookie[]> {
     if (urls && !Array.isArray(urls))
       urls = [urls];
     return await this.doGetCookies(urls as string[]);
   }
 
   async clearCookies(options: {name?: string | RegExp, domain?: string | RegExp, path?: string | RegExp}): Promise<void> {
-    const currentCookies = await this.cookies();
+    const currentCookies = await this._cookies();
     await this.doClearCookies();
 
     const matches = (cookie: channels.NetworkCookie, prop: 'name' | 'domain' | 'path', value: string | RegExp | undefined) => {
@@ -325,7 +330,11 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
     await this.addCookies(cookiesToReadd);
   }
 
-  setHTTPCredentials(httpCredentials?: types.Credentials): Promise<void> {
+  setHTTPCredentials(progress: Progress, httpCredentials?: types.Credentials): Promise<void> {
+    return progress.race(this.innerSetHTTPCredentials(httpCredentials));
+  }
+
+  innerSetHTTPCredentials(httpCredentials?: types.Credentials): Promise<void> {
     return this.doSetHTTPCredentials(httpCredentials);
   }
 
@@ -423,11 +432,11 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
     }
   }
 
-  async _loadDefaultContextAsIs(progress: Progress): Promise<Page | undefined> {
+  async loadDefaultContextAsIs(progress: Progress): Promise<Page | undefined> {
     if (!this.possiblyUninitializedPages().length) {
       const waitForEvent = helper.waitForEvent(progress, this, BrowserContext.Events.Page);
       // Race against BrowserContext.close
-      await Promise.race([waitForEvent.promise, this._closePromise]);
+      await progress.race(Promise.race([waitForEvent.promise, this._closePromise]));
     }
     const page = this.possiblyUninitializedPages()[0];
     if (!page)
@@ -439,8 +448,8 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
     return page;
   }
 
-  async _loadDefaultContext(progress: Progress) {
-    const defaultPage = await this._loadDefaultContextAsIs(progress);
+  async loadDefaultContext(progress: Progress) {
+    const defaultPage = await this.loadDefaultContextAsIs(progress);
     if (!defaultPage)
       return;
     const browserName = this._browser.options.name;
@@ -449,11 +458,11 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
       // - chromium fails to change isMobile for existing page;
       // - webkit fails to change locale for existing page.
       await this.newPage(progress);
-      await defaultPage.close();
+      await defaultPage.close(progress);
     }
   }
 
-  protected _authenticateProxyViaHeader() {
+  protected authenticateProxyViaHeader() {
     const proxy = this._options.proxy || this._browser.options.proxy || { username: undefined, password: undefined };
     const { username, password } = proxy;
     if (username) {
@@ -466,7 +475,7 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
     }
   }
 
-  protected _authenticateProxyViaCredentials() {
+  protected authenticateProxyViaCredentials() {
     const proxy = this._options.proxy || this._browser.options.proxy;
     if (!proxy)
       return;
@@ -475,7 +484,11 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
       this._options.httpCredentials = { username, password: password || '' };
   }
 
-  async addInitScript(source: string) {
+  async addInitScript(progress: Progress, source: string): Promise<InitScript> {
+    return await progress.race(this._internalAddInitScript(source));
+  }
+
+  private async _internalAddInitScript(source: string) {
     const initScript = new InitScript(this, source);
     this.initScripts.push(initScript);
     try {
@@ -496,7 +509,7 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
   async addRequestInterceptor(progress: Progress, handler: network.RouteHandler): Promise<void> {
     // Note: progress is intentionally ignored, because this operation is not cancellable and should not block in the browser anyway.
     this.requestInterceptors.push(handler);
-    await this.doUpdateRequestInterception();
+    await progress.race(this.doUpdateRequestInterception());
   }
 
   async removeRequestInterceptor(handler: network.RouteHandler): Promise<void> {
@@ -524,7 +537,7 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
     this._customCloseHandler = handler;
   }
 
-  async close(options: { reason?: string }) {
+  async close(progress: Progress, options: { reason?: string }) {
     if (this._closedStatus === 'open') {
       if (options.reason)
         this._closeReason = options.reason;
@@ -532,29 +545,25 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
       this._closedStatus = 'closing';
 
       for (const harRecorder of this._harRecorders.values())
-        await harRecorder.flush();
-      await this.tracing.flush();
-
-      // Cleanup.
-      const promises: Promise<void>[] = [];
-      for (const { context, artifact } of this._browser._idToVideo.values()) {
-        // Wait for the videos to finish.
-        if (context === this)
-          promises.push(artifact.finishedPromise());
-      }
+        await progress.race(harRecorder.flush());
+      await progress.race(this.tracing.flush());
+      await progress.race(Promise.all(this.pages().map(page => page.screencast.handlePageOrContextClose())));
 
       if (this._customCloseHandler) {
-        await this._customCloseHandler();
+        await progress.race(this._customCloseHandler());
       } else {
         // Close the context.
-        await this.doClose(options.reason);
+        const disposition = await progress.race(this.doClose(options.reason));
+        if (disposition === 'close-browser')
+          await this._browser.close(progress, { reason: options.reason });
       }
 
       // We delete downloads after context closure
       // so that browser does not write to the download file anymore.
+      const promises: Promise<void>[] = [];
       promises.push(this._deleteAllDownloads());
       promises.push(this._deleteAllTempDirs());
-      await Promise.all(promises);
+      await progress.race(Promise.all(promises));
 
       // Custom handler should trigger didCloseInternal itself.
       if (!this._customCloseHandler)
@@ -576,7 +585,7 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
       }
       throw pageOrError;
     } catch (error) {
-      await page?.close({ reason: 'Failed to create page' }).catch(() => {});
+      await page?.close(progress, { reason: 'Failed to create page' }).catch(() => {});
       throw error;
     } finally {
       this._creatingStorageStatePage = false;
@@ -589,7 +598,7 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
 
   async storageState(progress: Progress, indexedDB = false): Promise<channels.BrowserContextStorageStateResult> {
     const result: channels.BrowserContextStorageStateResult = {
-      cookies: await this.cookies(),
+      cookies: await this.cookies(progress),
       origins: []
     };
     const originsToSave = new Set(this._origins);
@@ -607,7 +616,7 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
       if (!origin || !originsToSave.has(origin))
         continue;
       try {
-        const storage: SerializedStorage = await page.mainFrame().nonStallingEvaluateInExistingContext(collectScript, 'utility');
+        const storage: SerializedStorage = await progress.race(page.mainFrame().nonStallingEvaluateInExistingContext(collectScript, 'utility'));
         if (storage.localStorage.length || storage.indexedDB?.length)
           result.origins.push({ origin, localStorage: storage.localStorage, indexedDB: storage.indexedDB });
         originsToSave.delete(origin);
@@ -626,12 +635,12 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
         for (const origin of originsToSave) {
           const frame = page.mainFrame();
           await frame.gotoImpl(progress, origin, {});
-          const storage: SerializedStorage = await progress.race(frame.evaluateExpression(collectScript, { world: 'utility' }));
+          const storage: SerializedStorage = await frame.evaluateExpression(progress, collectScript, { world: 'utility' });
           if (storage.localStorage.length || storage.indexedDB?.length)
             result.origins.push({ origin, localStorage: storage.localStorage, indexedDB: storage.indexedDB });
         }
       } finally {
-        await page.close();
+        await page.close(progress);
       }
     }
     return result;
@@ -675,7 +684,7 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
             const script = new (module.exports.StorageScript())(${this._browser.options.name === 'firefox'});
             return script.restore(${JSON.stringify(newOrigins.get(origin))});
           })()`;
-          await progress.race(frame.evaluateExpression(restoreScript, { world: 'utility' }));
+          await frame.evaluateExpression(progress, restoreScript, { world: 'utility' });
         }
       }
       this._origins = new Set([...newOrigins.keys()]);
@@ -684,7 +693,7 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
       throw error;
     } finally {
       if (mode !== 'resetForReuse')
-        await page?.close();
+        await page?.close(progress);
       else if (interceptor)
         await page?.removeRequestInterceptor(interceptor);
     }
@@ -710,9 +719,9 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
     return harId;
   }
 
-  async harExport(harId: string | undefined): Promise<Artifact> {
+  async harExport(progress: Progress, harId: string | undefined): Promise<Artifact> {
     const recorder = this._harRecorders.get(harId || '')!;
-    return recorder.export();
+    return progress.race(recorder.export());
   }
 
   addRouteInFlight(route: network.Route) {
@@ -742,27 +751,9 @@ export function validateBrowserContextOptions(options: types.BrowserContextOptio
     options.acceptDownloads = 'internal-browser-default';
   if (!options.viewport && !options.noDefaultViewport)
     options.viewport = { width: 1280, height: 720 };
-  if (options.recordVideo)
-    options.recordVideo.size = validateVideoSize(options.recordVideo.size, options.viewport);
   if (options.proxy)
     options.proxy = normalizeProxySettings(options.proxy);
   verifyGeolocation(options.geolocation);
-}
-
-export function validateVideoSize(size: types.Size | undefined, viewport: types.Size | undefined): types.Size {
-  if (!size) {
-    viewport ??= { width: 800, height: 600 };
-    const scale = Math.min(1, 800 / Math.max(viewport.width, viewport.height));
-    size = {
-      width: Math.floor(viewport.width * scale),
-      height: Math.floor(viewport.height * scale)
-    };
-  }
-  // Make sure both dimensions are odd, this is required for vp8
-  return {
-    width: size.width & ~1,
-    height: size.height & ~1
-  };
 }
 
 export function verifyGeolocation(geolocation?: types.Geolocation): asserts geolocation is types.Geolocation {

@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-import { getActionGroup, renderTitleForCall } from '@isomorphic/protocolFormatter';
+import { getActionGroup, renderTitleForCall } from '../protocolFormatter';
 
-import type { Language } from '@isomorphic/locatorGenerators';
+import type { Language } from '../locatorGenerators';
 import type { ResourceSnapshot } from '@trace/snapshot';
 import type * as trace from '@trace/trace';
 import type { ActionTraceEvent } from '@trace/trace';
-import type { ActionEntry, ContextEntry, PageEntry } from '@isomorphic/trace/entries';
+import type { ActionEntry, ContextEntry, PageEntry } from '../trace/entries';
 import type { StackFrame } from '@protocol/channels';
-import type { ActionGroup } from '@isomorphic/protocolFormatter';
+import type { ActionGroup } from '../protocolFormatter';
 
 const contextSymbol = Symbol('context');
 const nextInContextSymbol = Symbol('nextInContext');
@@ -117,7 +117,7 @@ export class TraceModel {
     this.errors = ([] as trace.ErrorTraceEvent[]).concat(...contexts.map(c => c.errors));
     this.hasSource = contexts.some(c => c.hasSource);
     this.hasStepData = contexts.some(context => context.origin === 'testRunner');
-    this.resources = [...contexts.map(c => c.resources)].flat().map(entry => ({ ...entry, id: `${entry.pageref}-${entry.time}-${entry.request.url}` }));
+    this.resources = [...contexts.map(c => c.resources)].flat().map(entry => ({ ...entry, id: `${entry.pageref}-${entry.startedDateTime}-${entry.request.url}` }));
     this.attachments = this.actions.flatMap(action => action.attachments?.map(attachment => ({ ...attachment, callId: action.callId, traceUri })) ?? []);
     this.visibleAttachments = this.attachments.filter(attachment => !attachment.name.startsWith('_'));
 

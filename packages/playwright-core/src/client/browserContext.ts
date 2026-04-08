@@ -15,6 +15,10 @@
  * limitations under the License.
  */
 
+import { headersObjectToArray } from '@isomorphic/headers';
+import { urlMatchesEqual } from '@isomorphic/urlMatch';
+import { isRegExp, isString } from '@isomorphic/rtti';
+import { rewriteErrorMessage } from '@isomorphic/stackTrace';
 import { Artifact } from './artifact';
 import { Browser } from './browser';
 import { CDPSession } from './cdpSession';
@@ -22,6 +26,7 @@ import { ChannelOwner } from './channelOwner';
 import { evaluationScript } from './clientHelper';
 import { Clock } from './clock';
 import { ConsoleMessage } from './consoleMessage';
+import { Debugger } from './debugger';
 import { Dialog } from './dialog';
 import { DisposableObject, DisposableStub } from './disposable';
 import { TargetClosedError, parseError } from './errors';
@@ -37,15 +42,11 @@ import { WebError } from './webError';
 import { Worker } from './worker';
 import { TimeoutSettings } from './timeoutSettings';
 import { mkdirIfNeeded } from './fileUtils';
-import { headersObjectToArray } from '../utils/isomorphic/headers';
-import { urlMatchesEqual } from '../utils/isomorphic/urlMatch';
-import { isRegExp, isString } from '../utils/isomorphic/rtti';
-import { rewriteErrorMessage } from '../utils/isomorphic/stackTrace';
 
 import type { BrowserContextOptions, Headers, SetStorageState, StorageState, WaitForEventOptions } from './types';
 import type * as structs from '../../types/structs';
 import type * as api from '../../types/types';
-import type { URLMatch } from '../utils/isomorphic/urlMatch';
+import type { URLMatch } from '@isomorphic/urlMatch';
 import type { Platform } from './platform';
 import type * as channels from '@protocol/channels';
 import type * as actions from '@recorder/actions';
@@ -69,6 +70,7 @@ export class BrowserContext extends ChannelOwner<channels.BrowserContextChannel>
   private _closedPromise: Promise<void>;
   readonly _options: channels.BrowserNewContextParams;
 
+  readonly debugger: Debugger;
   readonly request: APIRequestContext;
   readonly tracing: Tracing;
   readonly clock: Clock;
@@ -93,6 +95,7 @@ export class BrowserContext extends ChannelOwner<channels.BrowserContextChannel>
     super(parent, type, guid, initializer);
     this._options = initializer.options;
     this._timeoutSettings = new TimeoutSettings(this._platform);
+    this.debugger = Debugger.from(initializer.debugger);
     this.tracing = Tracing.from(initializer.tracing);
     this.request = APIRequestContext.from(initializer.requestContext);
     this.request._timeoutSettings = this._timeoutSettings;
@@ -229,7 +232,7 @@ export class BrowserContext extends ChannelOwner<channels.BrowserContextChannel>
     const routeHandlers = this._routes.slice();
     for (const routeHandler of routeHandlers) {
       // If the page or the context was closed we stall all requests right away.
-      if (page?._closeWasCalled || this.isClosedOrClosing())
+      if (page?._closeWasCalled || this.isClosed())
         return;
       if (!routeHandler.matches(route.request().url()))
         continue;
@@ -291,7 +294,7 @@ export class BrowserContext extends ChannelOwner<channels.BrowserContextChannel>
     return [...this._pages];
   }
 
-  isClosedOrClosing(): boolean {
+  isClosed(): boolean {
     return this._closingStatus !== 'none';
   }
 
@@ -513,7 +516,7 @@ export class BrowserContext extends ChannelOwner<channels.BrowserContextChannel>
   }
 
   async close(options: { reason?: string } = {}): Promise<void> {
-    if (this.isClosedOrClosing())
+    if (this.isClosed())
       return;
     this._closeReason = options.reason;
     this._closingStatus = 'closing';

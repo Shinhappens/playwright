@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import { ManualPromise,  eventsHelper } from 'playwright-core/lib/utils';
-import { colors } from 'playwright-core/lib/utils';
+import colors from 'colors/safe';
+import { ManualPromise } from '@isomorphic/manualPromise';
+import { eventsHelper } from '@utils/eventsHelper';
 
 import { addSuggestedRebaseline } from './rebase';
 import { WorkerHost } from './workerHost';
@@ -23,6 +24,7 @@ import { serializeConfig } from '../common/ipc';
 import { addLocationAndSnippetToError } from '../reporters/internalReporter';
 import { serializeError } from '../util';
 
+import type { RegisteredListener } from '@utils/eventsHelper';
 import type { FailureTracker } from './failureTracker';
 import type { ProcessExitData } from './processHost';
 import type { TestGroup } from './testGroups';
@@ -32,8 +34,6 @@ import type { AttachmentPayload, DonePayload, RunPayload, SerializedConfig, Step
 import type { Suite } from '../common/test';
 import type { TestCase } from '../common/test';
 import type { ReporterV2 } from '../reporters/reporterV2';
-import type { RegisteredListener } from 'playwright-core/lib/utils';
-
 
 export type EnvByProjectId = Map<string, Record<string, string | undefined>>;
 

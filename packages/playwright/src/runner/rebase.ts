@@ -17,10 +17,9 @@
 import fs from 'fs';
 import path from 'path';
 
-
-import { MultiMap } from 'playwright-core/lib/utils';
-import { colors } from 'playwright-core/lib/utils';
-import { diff } from 'playwright-core/lib/utilsBundle';
+import colors from 'colors/safe';
+import * as diff from 'diff';
+import { MultiMap } from '@isomorphic/multimap';
 
 import { filterProjects } from './projectUtils';
 import { babelParse, traverse, types } from '../transform/babelBundle';

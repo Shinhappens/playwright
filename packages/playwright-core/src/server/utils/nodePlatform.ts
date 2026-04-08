@@ -21,13 +21,11 @@ import * as util from 'util';
 import { Readable, Writable, pipeline } from 'stream';
 import { EventEmitter } from 'events';
 
-import { colors } from '../../utilsBundle';
+import colors from 'colors/safe';
 import { debugLogger } from './debugLogger';
 import { currentZone, emptyZone } from './zones';
 import { debugMode, isUnderTest } from './debug';
-import { zodToJsonSchema as zodToJsonSchemaV3, z } from '../../mcpBundle';
-import type zod3 from 'zod/v3';
-import type zod4 from 'zod';
+import { packageRoot as coreDir } from '../../package';
 
 import type { Platform, Zone } from '../../client/platform';
 import type { Zone as ZoneImpl } from './zones';
@@ -63,8 +61,6 @@ let boxedStackPrefixes: string[] = [];
 export function setBoxedStackPrefixes(prefixes: string[]) {
   boxedStackPrefixes = prefixes;
 }
-
-const coreDir = path.dirname(require.resolve('../../../package.json'));
 
 export const nodePlatform: Platform = {
   name: 'node',
@@ -124,13 +120,6 @@ export const nodePlatform: Platform = {
 
   streamWritable: (channel: channels.WritableStreamChannel) => {
     return new WritableStreamImpl(channel);
-  },
-
-  zodToJsonSchema: (schema: zod3.Schema | zod4.Schema): any => {
-    // https://zod.dev/library-authors?id=how-to-support-zod-3-and-zod-4-simultaneously
-    if ('_zod' in schema)
-      return z.toJSONSchema(schema);
-    return zodToJsonSchemaV3(schema);
   },
 
   zones: {

@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-import { eventsHelper } from '../../server/utils/eventsHelper';
+import { eventsHelper } from '@utils/eventsHelper';
 import { connectToBrowserAcrossVersions } from '../utils/connect';
 
 import type * as api from '../../..';
-import type { Transport } from '../../server/utils/httpServer';
+import type { Transport } from '@utils/httpServer';
 import type { DashboardChannel, DashboardChannelEvents, Tab } from '@dashboard/dashboardChannel';
 import type { BrowserDescriptor } from '../../serverRegistry';
 
@@ -106,6 +106,7 @@ export class DashboardConnection implements Transport, DashboardChannel {
 
   async dispatch(method: string, params: any): Promise<any> {
     await this._initPromise;
+    // eslint-disable-next-line no-restricted-syntax
     return (this as any)[method]?.(params);
   }
 
@@ -178,7 +179,7 @@ export class DashboardConnection implements Transport, DashboardChannel {
     if (this.selectedPage) {
       this._pageListeners.forEach(d => d.dispose());
       this._pageListeners = [];
-      await this.selectedPage.screencast().stop();
+      await this.selectedPage.screencast.stop();
     }
 
     this.selectedPage = page;
@@ -198,11 +199,13 @@ export class DashboardConnection implements Transport, DashboardChannel {
           if (frame === page.mainFrame())
             this._sendTabList();
         }),
-        eventsHelper.addEventListener(page.screencast(), 'screencastframe', ({ data }) => this._writeFrame(data, page.viewportSize()?.width ?? 0, page.viewportSize()?.height ?? 0))
     );
 
-    const maxSize = { width: 1280, height: 800 };
-    await page.screencast().start({ maxSize });
+    const size = { width: 1280, height: 800 };
+    await page.screencast.start({
+      onFrame: ({ data }: { data: Buffer }) => this._writeFrame(data, page.viewportSize()?.width ?? 0, page.viewportSize()?.height ?? 0),
+      size,
+    });
   }
 
   private _deselectPage() {
@@ -210,7 +213,7 @@ export class DashboardConnection implements Transport, DashboardChannel {
       return;
     this._pageListeners.forEach(d => d.dispose());
     this._pageListeners = [];
-    this.selectedPage.screencast().stop().catch(() => {});
+    this.selectedPage.screencast.stop().catch(() => {});
     this.selectedPage = null;
     this._lastFrameData = null;
     this._lastViewportSize = null;
@@ -243,8 +246,7 @@ export class DashboardConnection implements Transport, DashboardChannel {
       return [];
     const devtoolsUrl = await this._devtoolsUrl(pages[0]);
     return await Promise.all(pages.map(async page => {
-      // page.title() throws on navigation.
-      const title = await page.title().catch(() => undefined) || `Loading ${page.url()}`;
+      const title = await page.title();
       return {
         pageId: this._pageId(page),
         title,
@@ -260,10 +262,12 @@ export class DashboardConnection implements Transport, DashboardChannel {
   }
 
   private _pageId(p: api.Page): string {
+    // eslint-disable-next-line no-restricted-syntax -- _guid is very conservative.
     return (p as any)._guid;
   }
 
   private async _devtoolsUrl(page: api.Page) {
+    // eslint-disable-next-line no-restricted-syntax -- cdpPort is not in the public LaunchOptions type, fine if regresses.
     const cdpPort = (this._browserDescriptor.browser.launchOptions as any).cdpPort;
     if (cdpPort)
       return new URL(`http://localhost:${cdpPort}/devtools/`);
@@ -327,7 +331,7 @@ export class CDPConnection implements Transport {
     await this._initializePromise;
     if (!this._rawSession)
       throw new Error('CDP session is not initialized');
-    return await this._rawSession.send(method as any, params);
+    return await this._rawSession.send(method as Parameters<api.CDPSession['send']>[0], params);
   }
 
   onclose() {

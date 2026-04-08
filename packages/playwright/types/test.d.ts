@@ -31,6 +31,7 @@ export type HtmlReporterOptions = {
   title?: string;
   noSnippets?: boolean;
   noCopyPrompt?: boolean;
+  doNotInlineAssets?: boolean;
 };
 
 export type ReporterDescription = Readonly<
@@ -5531,6 +5532,29 @@ export interface TestType<TestArgs extends {}, WorkerArgs extends {}> {
   }
 
   /**
+   * Aborts the currently running test by throwing an error. The test is immediately marked as failed and execution
+   * stops. This is useful from inside a fixture or a route handler when you have detected an unrecoverable misuse and
+   * want to fail the test right away.
+   *
+   * **Usage**
+   *
+   * ```js
+   * import { test, expect } from '@playwright/test';
+   *
+   * test('does not publish to shared page', async ({ page }) => {
+   *   await page.route('**\/publish', route => {
+   *     test.abort('Tests must not publish to the shared page. Use the `clone` option.');
+   *     return route.abort();
+   *   });
+   *   // ...
+   * });
+   * ```
+   *
+   * @param message Optional message describing the reason for the abort. It will be included in the failure error.
+   */
+  abort(message?: string): never;
+
+  /**
    * Marks a test as "slow". Slow test will be given triple the default timeout.
    *
    * Note that [test.slow([condition, callback, description])](https://playwright.dev/docs/api/class-test#test-slow)
@@ -6933,6 +6957,10 @@ export interface PlaywrightWorkerOptions {
    * down to fit into 800x800. If `viewport` is not configured explicitly the video size defaults to 800x450. Actual
    * picture of each page will be scaled down if necessary to fit the specified size.
    *
+   * To annotate actions in the video, pass `show` with `action` and/or `test` sub-options. The `action` option controls
+   * visual highlights on interacted elements with an optional `delay` in milliseconds (defaults to `500`). The `test`
+   * option controls which test information is displayed as a status overlay.
+   *
    * **Usage**
    *
    * ```js
@@ -6948,7 +6976,7 @@ export interface PlaywrightWorkerOptions {
    *
    * Learn more about [recording video](https://playwright.dev/docs/test-use-options#recording-options).
    */
-  video: VideoMode | /** deprecated */ 'retry-with-video' | { mode: VideoMode, size?: ViewportSize };
+  video: VideoMode | /** deprecated */ 'retry-with-video' | { mode: VideoMode, size?: ViewportSize, show?: { actions?: { duration?: number, position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right', fontSize?: number }, test?: { level?: 'file' | 'title' | 'step', position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right', fontSize?: number } } };
 }
 
 export type ScreenshotMode = 'off' | 'on' | 'only-on-failure' | 'on-first-failure';
@@ -7915,6 +7943,34 @@ interface GenericAssertions<R> {
    *
    */
   not: GenericAssertions<R>;
+  /**
+   * Use `resolves` to unwrap the value of a fulfilled promise so any other matcher can be chained. If the promise is
+   * rejected the assertion fails.
+   *
+   * For example, this code tests that the promise resolves and that the resulting value is `'lemon'`:
+   *
+   * ```js
+   * test('resolves to lemon', async () => {
+   *   await expect(Promise.resolve('lemon')).resolves.toBe('lemon');
+   * });
+   * ```
+   *
+   */
+  resolves: GenericAssertions<R>;
+  /**
+   * Use `.rejects` to unwrap the reason of a rejected promise so any other matcher can be chained. If the promise is
+   * fulfilled the assertion fails.
+   *
+   * For example, this code tests that the promise rejects with reason `'octopus'`:
+   *
+   * ```js
+   * test('rejects to octopus', async () => {
+   *   await expect(Promise.reject(new Error('octopus'))).rejects.toThrow('octopus');
+   * });
+   * ```
+   *
+   */
+  rejects: GenericAssertions<R>;
   /**
    * Compares value with
    * [`expected`](https://playwright.dev/docs/api/class-genericassertions#generic-assertions-to-be-option-expected) by
@@ -9721,6 +9777,57 @@ interface PageAssertions {
      * ignores this flag.
      */
     ignoreCase?: boolean;
+
+    /**
+     * Time to retry the assertion for in milliseconds. Defaults to `timeout` in `TestConfig.expect`.
+     */
+    timeout?: number;
+  }): Promise<void>;
+
+  /**
+   * Asserts that the page body matches the given [accessibility snapshot](https://playwright.dev/docs/aria-snapshots).
+   *
+   * **Usage**
+   *
+   * ```js
+   * await page.goto('https://demo.playwright.dev/todomvc/');
+   * await expect(page).toMatchAriaSnapshot(`
+   *   - heading "todos"
+   *   - textbox "What needs to be done?"
+   * `);
+   * ```
+   *
+   * @param expected
+   * @param options
+   */
+  toMatchAriaSnapshot(expected: string, options?: {
+    /**
+     * Time to retry the assertion for in milliseconds. Defaults to `timeout` in `TestConfig.expect`.
+     */
+    timeout?: number;
+  }): Promise<void>;
+
+  /**
+   * Asserts that the page body matches the given [accessibility snapshot](https://playwright.dev/docs/aria-snapshots).
+   *
+   * Snapshot is stored in a separate `.aria.yml` file in a location configured by
+   * `expect.toMatchAriaSnapshot.pathTemplate` and/or `snapshotPathTemplate` properties in the configuration file.
+   *
+   * **Usage**
+   *
+   * ```js
+   * await expect(page).toMatchAriaSnapshot();
+   * await expect(page).toMatchAriaSnapshot({ name: 'home.aria.yml' });
+   * ```
+   *
+   * @param options
+   */
+  toMatchAriaSnapshot(options?: {
+    /**
+     * Name of the snapshot to store in the snapshot folder corresponding to this test. Generates sequential names if not
+     * specified.
+     */
+    name?: string;
 
     /**
      * Time to retry the assertion for in milliseconds. Defaults to `timeout` in `TestConfig.expect`.

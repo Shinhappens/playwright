@@ -1,9 +1,20 @@
 [*]
+@isomorphic/**
+@utils/**
 common/
-./utils.ts
-./utilsBundle.ts
+./util.ts
+node_modules/commander
+node_modules/debug
+node_modules/mime
+node_modules/minimatch
 
 [program.ts]
+**
+
+[testActions.ts]
+**
+
+[reportActions.ts]
 **
 
 [index.ts]
@@ -14,8 +25,5 @@ common/
 ./mcp/sdk/
 ./mcp/test/
 ./transform/babelBundle.ts
-
-[internalsForTest.ts]
-**
 
 [errorContext.ts]

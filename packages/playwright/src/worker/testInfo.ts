@@ -17,7 +17,13 @@
 import fs from 'fs';
 import path from 'path';
 
-import { captureRawStack, monotonicTime, sanitizeForFilePath, stringifyStackFrames, currentZone, createGuid, escapeWithQuotes, ManualPromise } from 'playwright-core/lib/utils';
+import { ManualPromise } from '@isomorphic/manualPromise';
+import { captureRawStack, stringifyStackFrames } from '@isomorphic/stackTrace';
+import { escapeWithQuotes } from '@isomorphic/stringUtils';
+import { monotonicTime } from '@isomorphic/time';
+import { createGuid } from '@utils/crypto';
+import { sanitizeForFilePath } from '@utils/fileUtils';
+import { currentZone } from '@utils/zones';
 
 import { TimeoutManager, TimeoutManagerError, kMaxDeadline } from './timeoutManager';
 import { addSuffixToFilePath, filteredStackTrace, getContainedPath, normalizeAndSaveAttachment, sanitizeFilePathBeforeExtension, trimLongString, windowsFilesystemFriendlyLength } from '../util';
@@ -98,6 +104,8 @@ export class TestInfoImpl implements TestInfo {
   private readonly _stepMap = new Map<string, TestStepInternal>();
   _onDidFinishTestFunctionCallbacks = new Set<() => Promise<void>>();
   _onCustomMessageCallback?: (data: any) => Promise<any>;
+  _onUserStepBegin?: (title: string) => Promise<void>;
+  _onUserStepEnd?: () => Promise<void>;
   _hasNonRetriableError = false;
   _hasUnhandledError = false;
   _allowSkips = false;
@@ -134,6 +142,7 @@ export class TestInfoImpl implements TestInfo {
   errors: ipc.TestInfoErrorImpl[] = [];
   readonly _attachmentsPush: (...items: TestInfo['attachments']) => number;
   private _workerParams: ipc.WorkerInitParams;
+  private _ignoreTimeoutsCounter = 0;
 
   get error(): ipc.TestInfoErrorImpl | undefined {
     return this.errors[0];
@@ -200,8 +209,8 @@ export class TestInfoImpl implements TestInfo {
     this.expectedStatus = test?.expectedStatus ?? 'skipped';
 
     this._timeoutManager = new TimeoutManager(this.project.timeout);
-    if (configInternal.configCLIOverrides.debug)
-      this._setDebugMode();
+    if (configInternal.configCLIOverrides.debug === 'inspector')
+      this._setIgnoreTimeouts(true);
 
     this.outputDir = (() => {
       const relativeTestFilePath = path.relative(this.project.testDir, this._requireFile.replace(/\.(spec|test)\.(js|ts|jsx|tsx|mjs|mts|cjs|cts)$/, ''));
@@ -391,6 +400,11 @@ export class TestInfoImpl implements TestInfo {
     return step;
   }
 
+  _abort(location: Location, message: string | undefined) {
+    this.annotations.push({ type: 'abort', description: message, location });
+    throw new TestAbortError('Test aborted' + (message ? ': ' + message : ''));
+  }
+
   _interrupt() {
     // Mark as interrupted so we can ignore TimeoutError thrown by interrupt() call.
     this._interruptedPromise.resolve();
@@ -462,8 +476,9 @@ export class TestInfoImpl implements TestInfo {
     return ['beforeAll', 'afterAll', 'beforeEach', 'afterEach'].includes(type) ? type : undefined;
   }
 
-  _setDebugMode() {
-    this._timeoutManager.setIgnoreTimeouts();
+  _setIgnoreTimeouts(ignoreTimeouts: boolean) {
+    this._ignoreTimeoutsCounter += ignoreTimeouts ? 1 : -1;
+    this._timeoutManager.setIgnoreTimeouts(this._ignoreTimeoutsCounter > 0);
   }
 
   async _didFinishTestFunction() {
@@ -703,6 +718,9 @@ export class TestStepInfoImpl implements TestStepInfo {
 }
 
 export class TestSkipError extends Error {
+}
+
+export class TestAbortError extends Error {
 }
 
 export class StepSkipError extends Error {

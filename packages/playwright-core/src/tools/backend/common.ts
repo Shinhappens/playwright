@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { z } from '../../mcpBundle';
+import * as z from 'zod';
 import { defineTabTool, defineTool } from './tool';
 import { renderTabsMarkdown } from './response';
 

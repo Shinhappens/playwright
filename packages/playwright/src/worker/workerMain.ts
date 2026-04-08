@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 
-import { ManualPromise, gracefullyCloseAll, removeFolders } from 'playwright-core/lib/utils';
-import { colors } from 'playwright-core/lib/utils';
+import colors from 'colors/safe';
+import { ManualPromise } from '@isomorphic/manualPromise';
+import { removeFolders } from '@utils/fileUtils';
+import { gracefullyCloseAll } from '@utils/processLauncher';
 
 import { deserializeConfig } from '../common/configLoader';
 import { setCurrentTestInfo, setIsWorkerProcess } from '../common/globals';

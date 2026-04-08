@@ -18,7 +18,7 @@ import * as React from 'react';
 import type { Boundaries } from './geometry';
 import './networkTab.css';
 import { NetworkResourceDetails } from './networkResourceDetails';
-import { bytesToString, msToString } from '@web/uiUtils';
+import { bytesToString, msToString } from '@isomorphic/formatUtils';
 import { PlaceholderPanel } from './placeholderPanel';
 import { context, type ResourceEntry } from '@isomorphic/trace/traceModel';
 import type { TraceModel } from '@isomorphic/trace/traceModel';
@@ -196,8 +196,8 @@ const renderCell = (entry: RenderedEntry, column: ColumnName): RenderedGridCell 
     return { body: entry.method };
   if (column === 'status') {
     return {
-      body: entry.status.code > 0 ? entry.status.code : '',
-      title: entry.status.text
+      body: entry.status.code === -1 ? 'canceled' : entry.status.code > 0 ? entry.status.code : '',
+      title: entry.status.code === -1 ? 'canceled' : entry.status.text,
     };
   }
   if (column === 'contentType')

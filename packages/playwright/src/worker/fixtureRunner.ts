@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-import { escapeWithQuotes, ManualPromise } from 'playwright-core/lib/utils';
+import { ManualPromise } from '@isomorphic/manualPromise';
+import { escapeWithQuotes } from '@isomorphic/stringUtils';
 
 import { fixtureParameterNames } from '../common/fixtures';
 import { filterStackFile, formatLocation } from '../util';

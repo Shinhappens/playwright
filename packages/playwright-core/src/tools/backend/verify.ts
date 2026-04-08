@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 
-import { z } from '../../mcpBundle';
-import { escapeWithQuotes } from '../../utils/isomorphic/stringUtils';
+import * as z from 'zod';
+import { escapeWithQuotes } from '@isomorphic/stringUtils';
 
 import { defineTabTool } from './tool';
+import type * as playwright from '../../..';
 
 const verifyElement = defineTabTool({
   capability: 'testing',
@@ -34,9 +35,9 @@ const verifyElement = defineTabTool({
 
   handle: async (tab, params, response) => {
     for (const frame of tab.page.frames()) {
-      const locator = frame.getByRole(params.role as any, { name: params.accessibleName });
+      const locator = frame.getByRole(params.role as Parameters<playwright.Frame['getByRole']>[0], { name: params.accessibleName });
       if (await locator.count() > 0) {
-        const resolved = await locator.toCode();
+        const resolved = await locator.normalize();
         response.addCode(`await expect(page.${resolved}).toBeVisible();`);
         response.addTextResult('Done');
         return;
@@ -62,7 +63,7 @@ const verifyText = defineTabTool({
     for (const frame of tab.page.frames()) {
       const locator = frame.getByText(params.text).filter({ visible: true });
       if (await locator.count() > 0) {
-        const resolved = await locator.toCode();
+        const resolved = await locator.normalize();
         response.addCode(`await expect(page.${resolved}).toBeVisible();`);
         response.addTextResult('Done');
         return;

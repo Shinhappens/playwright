@@ -3,7 +3,8 @@
 ../../
 ../../client/connect.ts
 ../../server/registry/index.ts
-../../server/utils/
+@utils/**
 ../../serverRegistry.ts
-../../utils/
-../utils/
+../../utils/**
+../cli-client/registry.ts
+../utils/**

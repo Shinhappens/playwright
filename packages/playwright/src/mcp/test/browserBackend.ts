@@ -14,14 +14,13 @@
  * limitations under the License.
  */
 
-import { createGuid } from 'playwright-core/lib/utils';
-import * as tools from 'playwright-core/lib/tools/exports';
+import crypto from 'crypto';
 
-import { stripAnsiEscapes } from '../../util';
+import { stripAnsiEscapes } from '@isomorphic/stringUtils';
 
+import type { tools } from 'playwright-core/lib/coreBundle';
 import type * as playwright from '../../../index';
 import type { TestInfoImpl } from '../../worker/testInfo';
-import type { Browser } from '../../../../playwright-core/src/client/browser';
 
 export type BrowserMCPRequest = {
   initialize?: { clientInfo: tools.ClientInfo },
@@ -39,15 +38,18 @@ export type BrowserMCPResponse = {
 export function createCustomMessageHandler(testInfo: TestInfoImpl, context: playwright.BrowserContext) {
   let backend: tools.BrowserBackend | undefined;
   const config: tools.ContextConfig = { capabilities: ['testing'] };
-  const toolList = tools.filteredTools(config);
+  let tools: typeof import('playwright-core/lib/coreBundle').tools | undefined;
 
   return async (data: BrowserMCPRequest): Promise<BrowserMCPResponse> => {
+    if (!tools)
+      ({ tools } = require('playwright-core/lib/coreBundle') as typeof import('playwright-core/lib/coreBundle'));
+    const toolList = tools.filteredTools(config);
     if (data.initialize) {
       if (backend)
         throw new Error('MCP backend is already initialized');
       backend = new tools.BrowserBackend(config, context, toolList);
       await backend.initialize(data.initialize.clientInfo);
-      const pausedMessage = await generatePausedMessage(testInfo, context);
+      const pausedMessage = await generatePausedMessage(tools, testInfo, context);
       return { initialize: { pausedMessage } };
     }
 
@@ -67,7 +69,7 @@ export function createCustomMessageHandler(testInfo: TestInfoImpl, context: play
   };
 }
 
-async function generatePausedMessage(testInfo: TestInfoImpl, context: playwright.BrowserContext) {
+async function generatePausedMessage(tools: typeof import('playwright-core/lib/coreBundle').tools, testInfo: TestInfoImpl, context: playwright.BrowserContext) {
   const lines: string[] = [];
 
   if (testInfo.errors.length) {
@@ -98,7 +100,7 @@ async function generatePausedMessage(testInfo: TestInfoImpl, context: playwright
     lines.push(
         `- Page Snapshot:`,
         '```yaml',
-        (await page.snapshotForAI()).full,
+        await page.ariaSnapshot({ mode: 'ai' }),
         '```',
     );
   }
@@ -110,31 +112,21 @@ async function generatePausedMessage(testInfo: TestInfoImpl, context: playwright
   return lines.join('\n');
 }
 
-export async function runDaemonForBrowser(testInfo: TestInfoImpl, browser: playwright.Browser): Promise<void> {
-  if (process.env.PWPAUSE !== 'cli')
-    return;
+export async function runDaemonForContext(testInfo: TestInfoImpl, context: playwright.BrowserContext) {
+  if (testInfo._configInternal.configCLIOverrides.debug !== 'cli')
+    return false;
 
-  const browserTitle = `test-worker-${createGuid().slice(0, 6)}`;
-  await (browser as Browser)._register(browserTitle, { workspaceDir: testInfo.project.testDir });
-
-  const lines = [''];
-  if (testInfo.errors.length) {
-    lines.push(`### Paused on test error`);
-    for (const error of testInfo.errors)
-      lines.push(stripAnsiEscapes(error.message || ''));
-  } else {
-    lines.push(`### Paused at the end of the test`);
-  }
-  lines.push(
-      `### Debugging Instructions`,
-      `- Pick a session name, e.g. "test"`,
-      `- Run "playwright-cli --session=<name> open --attach=${browserTitle}" to attach to this page`,
-      `- Use "playwright-cli --session=<name>" to explore the page and fix the problem`,
-      `- Stop this test run when finished. Restart if needed.`,
-      ``,
-  );
+  const sessionName = `tw-${crypto.randomBytes(3).toString('hex')}`;
+  await context.browser()!.bind(sessionName, { workspaceDir: testInfo.project.testDir });
 
   /* eslint-disable-next-line no-console */
-  console.log(lines.join('\n'));
-  await new Promise(() => {});
+  console.log([
+    `### The test is currently paused at the start`,
+    ``,
+    `### Debugging Instructions`,
+    `- Run "playwright-cli attach ${sessionName}" to attach to this test`,
+  ].join('\n'));
+
+  await context.debugger.requestPause();
+  return true;
 }

@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-import { formatMatcherMessage, isRegExp } from 'playwright-core/lib/utils';
+import { isRegExp } from '@isomorphic/rtti';
+import { formatMatcherMessage } from '@utils/expectUtils';
 
 import { expectTypes } from '../util';
 
@@ -30,7 +31,7 @@ export async function toEqual<T>(
   this: ExpectMatcherStateInternal,
   matcherName: string,
   locator: Locator,
-  receiverType: string,
+  receiverType: 'Locator',
   query: (isNot: boolean, timeout: number) => Promise<{ matches: boolean, received?: any, log?: string[], timedOut?: boolean, errorMessage?: string }>,
   expected: T,
   options: { timeout?: number, contains?: boolean } = {},

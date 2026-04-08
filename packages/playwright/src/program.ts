@@ -1,7 +1,7 @@
 /**
  * Copyright (c) Microsoft Corporation.
  *
- * Licensed under the Apache License, Version 2.0 (the 'License");
+ * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
@@ -16,34 +16,26 @@
 
 /* eslint-disable no-console */
 
-import fs from 'fs';
-import path from 'path';
+import 'playwright-core/lib/bootstrap';
 
-import { program } from 'playwright-core/lib/cli/program';
-import { gracefullyProcessExitDoNotHang, startProfiling, stopProfiling } from 'playwright-core/lib/utils';
-import * as tools from 'playwright-core/lib/tools/exports';
-import { setupExitWatchdog } from 'playwright-core/lib/tools/exports';
-
+import { libCli, tools } from 'playwright-core/lib/coreBundle';
+import { program } from 'commander';
+import { gracefullyProcessExitDoNotHang } from '@utils/processLauncher';
 import { builtInReporters, defaultReporter, defaultTimeout } from './common/config';
-import { loadConfigFromFile, loadEmptyConfigForMergeReports, resolveConfigLocation } from './common/configLoader';
-export { program } from 'playwright-core/lib/cli/program';
-import { terminalScreen } from './reporters/base';
-import { showHTMLReport } from './reporters/html';
-import { createMergedReport } from './reporters/merge';
-import { filterProjects } from './runner/projectUtils';
-import * as testServer from './runner/testServer';
-import { runWatchModeLoop } from './runner/watchMode';
-import { runAllTestsWithConfig, TestRunner } from './runner/testRunner';
-import { createErrorCollectingReporter } from './runner/reporters';
+import { runTests, clearCache, runTestServerAction } from './cli/testActions';
+import { showReport, mergeReports } from './cli/reportActions';
 import { TestServerBackend, testServerBackendTools } from './mcp/test/testBackend';
+import { loadConfigFromFile } from './common/configLoader';
 import { ClaudeGenerator, OpencodeGenerator, VSCodeGenerator, CopilotGenerator } from './agents/generateAgents';
 
-import type { ConfigCLIOverrides } from './common/ipc';
+export { program };
+
 import type { TraceMode } from '../types/test';
-import type { ReporterDescription } from '../types/test';
 import type { Command } from 'playwright-core/lib/utilsBundle';
 
 const packageJSON = require('../package.json');
+
+libCli.decorateProgram(program);
 
 function addTestCommand(program: Command) {
   const command = program.command('test [test-filter...]');
@@ -84,20 +76,7 @@ function addClearCacheCommand(program: Command) {
   command.description('clears build and test caches');
   command.option('-c, --config <file>', `Configuration file, or a test directory with optional "playwright.config.{m,c}?{js,ts}"`);
   command.action(async opts => {
-    const runner = new TestRunner(resolveConfigLocation(opts.config), {});
-    const { status } = await runner.clearCache(createErrorCollectingReporter(terminalScreen));
-    const exitCode = status === 'interrupted' ? 130 : (status === 'passed' ? 0 : 1);
-    gracefullyProcessExitDoNotHang(exitCode);
-  });
-}
-
-function addDevServerCommand(program: Command) {
-  const command = program.command('dev-server', { hidden: true });
-  command.description('start dev server');
-  command.option('-c, --config <file>', `Configuration file, or a test directory with optional "playwright.config.{m,c}?{js,ts}"`);
-  command.action(async options => {
-    const runner = new TestRunner(resolveConfigLocation(options.config), {});
-    await runner.startDevServer(createErrorCollectingReporter(terminalScreen), 'in-process');
+    await clearCache(opts);
   });
 }
 
@@ -107,13 +86,17 @@ function addTestServerCommand(program: Command) {
   command.option('-c, --config <file>', `Configuration file, or a test directory with optional "playwright.config.{m,c}?{js,ts}"`);
   command.option('--host <host>', 'Host to start the server on', 'localhost');
   command.option('--port <port>', 'Port to start the server on', '0');
-  command.action(opts => runTestServer(opts));
+  command.action(async opts => {
+    await runTestServerAction(opts);
+  });
 }
 
 function addShowReportCommand(program: Command) {
   const command = program.command('show-report [report]');
   command.description('show HTML report');
-  command.action((report, options) => showHTMLReport(report, options.host, +options.port));
+  command.action(async (report, options) => {
+    await showReport(report, options.host, +options.port);
+  });
   command.option('--host <host>', 'Host to serve report on', 'localhost');
   command.option('--port <port>', 'Port to serve report on', '9323');
   command.addHelpText('afterAll', `
@@ -154,7 +137,7 @@ function addTestMCPServerCommand(program: Command) {
   command.option('--host <host>', 'host to bind server to. Default is localhost. Use 0.0.0.0 to bind to all interfaces.');
   command.option('--port <port>', 'port to listen on for SSE transport.');
   command.action(async options => {
-    setupExitWatchdog();
+    tools.setupExitWatchdog();
     const factory: tools.ServerBackendFactory = {
       name: 'Playwright Test Runner',
       nameInConfig: 'playwright-test-runner',
@@ -192,210 +175,6 @@ function addInitAgentsCommand(program: Command) {
   });
 }
 
-async function runTests(args: string[], opts: { [key: string]: any }) {
-  await startProfiling();
-  const cliOverrides = overridesFromOptions(opts);
-
-  const config = await loadConfigFromFile(opts.config, cliOverrides, opts.deps === false);
-  config.cliArgs = args;
-  config.cliGrep = opts.grep as string | undefined;
-  config.cliOnlyChanged = opts.onlyChanged === true ? 'HEAD' : opts.onlyChanged;
-  config.cliGrepInvert = opts.grepInvert as string | undefined;
-  config.cliListOnly = !!opts.list;
-  config.cliProjectFilter = opts.project || undefined;
-  config.cliPassWithNoTests = !!opts.passWithNoTests;
-  config.cliLastFailed = !!opts.lastFailed;
-  config.cliTestList = opts.testList ? path.resolve(process.cwd(), opts.testList) : undefined;
-  config.cliTestListInvert = opts.testListInvert ? path.resolve(process.cwd(), opts.testListInvert) : undefined;
-
-  // Evaluate project filters against config before starting execution. This enables a consistent error message across run modes
-  filterProjects(config.projects, config.cliProjectFilter);
-
-  if (opts.ui || opts.uiHost || opts.uiPort) {
-    if (opts.onlyChanged)
-      throw new Error(`--only-changed is not supported in UI mode. If you'd like that to change, see https://github.com/microsoft/playwright/issues/15075 for more details.`);
-
-    const status = await testServer.runUIMode(opts.config, cliOverrides, {
-      host: opts.uiHost,
-      port: opts.uiPort ? +opts.uiPort : undefined,
-      args,
-      grep: opts.grep as string | undefined,
-      grepInvert: opts.grepInvert as string | undefined,
-      project: opts.project || undefined,
-      reporter: Array.isArray(opts.reporter) ? opts.reporter : opts.reporter ? [opts.reporter] : undefined,
-    });
-    await stopProfiling('runner');
-    const exitCode = status === 'interrupted' ? 130 : (status === 'passed' ? 0 : 1);
-    gracefullyProcessExitDoNotHang(exitCode);
-    return;
-  }
-
-  if (process.env.PWTEST_WATCH) {
-    if (opts.onlyChanged)
-      throw new Error(`--only-changed is not supported in watch mode. If you'd like that to change, file an issue and let us know about your usecase for it.`);
-
-    const status = await runWatchModeLoop(
-        resolveConfigLocation(opts.config),
-        {
-          projects: opts.project,
-          files: args,
-          grep: opts.grep
-        }
-    );
-    await stopProfiling('runner');
-    const exitCode = status === 'interrupted' ? 130 : (status === 'passed' ? 0 : 1);
-    gracefullyProcessExitDoNotHang(exitCode);
-    return;
-  }
-
-  const status = await runAllTestsWithConfig(config);
-  await stopProfiling('runner');
-  const exitCode = status === 'interrupted' ? 130 : (status === 'passed' ? 0 : 1);
-  gracefullyProcessExitDoNotHang(exitCode);
-}
-
-async function runTestServer(opts: { [key: string]: any }) {
-  const host = opts.host;
-  const port = opts.port ? +opts.port : undefined;
-  const status = await testServer.runTestServer(opts.config, { }, { host, port });
-  const exitCode = status === 'interrupted' ? 130 : (status === 'passed' ? 0 : 1);
-  gracefullyProcessExitDoNotHang(exitCode);
-}
-
-async function mergeReports(reportDir: string | undefined, opts: { [key: string]: any }) {
-  const configFile = opts.config;
-  const config = configFile ? await loadConfigFromFile(configFile) : await loadEmptyConfigForMergeReports();
-
-  const dir = path.resolve(process.cwd(), reportDir || '');
-  const dirStat = await fs.promises.stat(dir).catch(e => null);
-  if (!dirStat)
-    throw new Error('Directory does not exist: ' + dir);
-  if (!dirStat.isDirectory())
-    throw new Error(`"${dir}" is not a directory`);
-  let reporterDescriptions: ReporterDescription[] | undefined = resolveReporterOption(opts.reporter);
-  if (!reporterDescriptions && configFile)
-    reporterDescriptions = config.config.reporter;
-  if (!reporterDescriptions)
-    reporterDescriptions = [[defaultReporter]];
-  const rootDirOverride = configFile ? config.config.rootDir : undefined;
-  await createMergedReport(config, dir, reporterDescriptions!, rootDirOverride);
-  gracefullyProcessExitDoNotHang(0);
-}
-
-function overridesFromOptions(options: { [key: string]: any }): ConfigCLIOverrides {
-  const overrides: ConfigCLIOverrides = {
-    failOnFlakyTests: options.failOnFlakyTests ? true : undefined,
-    forbidOnly: options.forbidOnly ? true : undefined,
-    fullyParallel: options.fullyParallel ? true : undefined,
-    globalTimeout: options.globalTimeout ? parseInt(options.globalTimeout, 10) : undefined,
-    maxFailures: options.x ? 1 : (options.maxFailures ? parseInt(options.maxFailures, 10) : undefined),
-    outputDir: options.output ? path.resolve(process.cwd(), options.output) : undefined,
-    quiet: options.quiet ? options.quiet : undefined,
-    repeatEach: options.repeatEach ? parseInt(options.repeatEach, 10) : undefined,
-    retries: options.retries ? parseInt(options.retries, 10) : undefined,
-    reporter: resolveReporterOption(options.reporter),
-    shard: resolveShardOption(options.shard),
-    shardWeights: resolveShardWeightsOption(),
-    timeout: options.timeout ? parseInt(options.timeout, 10) : undefined,
-    tsconfig: options.tsconfig ? path.resolve(process.cwd(), options.tsconfig) : undefined,
-    ignoreSnapshots: options.ignoreSnapshots ? !!options.ignoreSnapshots : undefined,
-    updateSnapshots: options.updateSnapshots,
-    updateSourceMethod: options.updateSourceMethod,
-    workers: options.workers,
-  };
-
-  if (options.browser) {
-    const browserOpt = options.browser.toLowerCase();
-    if (!['all', 'chromium', 'firefox', 'webkit'].includes(browserOpt))
-      throw new Error(`Unsupported browser "${options.browser}", must be one of "all", "chromium", "firefox" or "webkit"`);
-    const browserNames = browserOpt === 'all' ? ['chromium', 'firefox', 'webkit'] : [browserOpt];
-    overrides.projects = browserNames.map(browserName => {
-      return {
-        name: browserName,
-        use: { browserName },
-      };
-    });
-  }
-
-  if (options.headed || options.debug)
-    overrides.use = { headless: false };
-  if (!options.ui && options.debug) {
-    overrides.debug = true;
-    process.env.PWDEBUG = '1';
-  }
-  if (!options.ui && options.trace) {
-    overrides.use = overrides.use || {};
-    overrides.use.trace = options.trace;
-  }
-  if (process.env.PWPAUSE === 'cli') {
-    overrides.timeout = 0;
-    overrides.use = overrides.use || {};
-    overrides.use.actionTimeout = 5000;
-  } else if (process.env.PWPAUSE) {
-    overrides.pause = true;
-  }
-  if (overrides.tsconfig && !fs.existsSync(overrides.tsconfig))
-    throw new Error(`--tsconfig "${options.tsconfig}" does not exist`);
-
-  return overrides;
-}
-
-function resolveReporterOption(reporter?: string): ReporterDescription[] | undefined {
-  if (!reporter || !reporter.length)
-    return undefined;
-  return reporter.split(',').map((r: string) => [resolveReporter(r)]);
-}
-
-function resolveShardOption(shard?: string): ConfigCLIOverrides['shard'] {
-  if (!shard)
-    return undefined;
-
-  const shardPair = shard.split('/');
-
-  if (shardPair.length !== 2) {
-    throw new Error(
-        `--shard "${shard}", expected format is "current/all", 1-based, for example "3/5".`,
-    );
-  }
-
-  const current = parseInt(shardPair[0], 10);
-  const total = parseInt(shardPair[1], 10);
-
-  if (isNaN(total) || total < 1)
-    throw new Error(`--shard "${shard}" total must be a positive number`);
-
-
-  if (isNaN(current) || current < 1 || current > total) {
-    throw new Error(
-        `--shard "${shard}" current must be a positive number, not greater than shard total`,
-    );
-  }
-
-  return { current, total };
-}
-
-function resolveShardWeightsOption(): ConfigCLIOverrides['shardWeights'] {
-  const shardWeights = process.env.PWTEST_SHARD_WEIGHTS;
-  if (!shardWeights)
-    return undefined;
-
-  return shardWeights.split(':').map(w => {
-    const weight = parseInt(w, 10);
-    if (isNaN(weight) || weight < 0)
-      throw new Error(`PWTEST_SHARD_WEIGHTS="${shardWeights}" weights must be non-negative numbers`);
-    return weight;
-  });
-}
-
-function resolveReporter(id: string) {
-  if (builtInReporters.includes(id as any))
-    return id;
-  const localPath = path.resolve(process.cwd(), id);
-  if (fs.existsSync(localPath))
-    return localPath;
-  return require.resolve(id, { paths: [process.cwd()] });
-}
-
 const kTraceModes: TraceMode[] = ['on', 'off', 'on-first-retry', 'on-all-retries', 'retain-on-failure', 'retain-on-first-failure', 'retain-on-failure-and-retries'];
 
 // Note: update docs/src/test-cli-js.md when you update this, program is the source of truth.
@@ -403,7 +182,7 @@ const kTraceModes: TraceMode[] = ['on', 'off', 'on-first-retry', 'on-all-retries
 const testOptions: [string, { description: string, choices?: string[], preset?: string }][] = [
   /* deprecated */ ['--browser <browser>', { description: `Browser to use for tests, one of "all", "chromium", "firefox" or "webkit" (default: "chromium")` }],
   ['-c, --config <file>', { description: `Configuration file, or a test directory with optional "playwright.config.{m,c}?{js,ts}"` }],
-  ['--debug', { description: `Run tests with Playwright Inspector. Shortcut for "PWDEBUG=1" environment variable and "--timeout=0 --max-failures=1 --headed --workers=1" options` }],
+  ['--debug [mode]', { description: `Run tests with Playwright Inspector. Shortcut for "PWDEBUG=1" environment variable and "--timeout=0 --max-failures=1 --headed --workers=1" options`, choices: ['inspector', 'cli'], preset: 'inspector' }],
   ['--fail-on-flaky-tests', { description: `Fail if any test is flagged as flaky (default: false)` }],
   ['--forbid-only', { description: `Fail if test.only is called (default: false)` }],
   ['--fully-parallel', { description: `Run all tests in parallel (default: false)` }],
@@ -445,6 +224,5 @@ addShowReportCommand(program);
 addMergeReportsCommand(program);
 addClearCacheCommand(program);
 addTestMCPServerCommand(program);
-addDevServerCommand(program);
 addTestServerCommand(program);
 addInitAgentsCommand(program);

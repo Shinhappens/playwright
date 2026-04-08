@@ -17,7 +17,8 @@
 import fs from 'fs';
 import path from 'path';
 
-import { mkdirIfNeeded } from 'playwright-core/lib/utils';
+import { mkdirIfNeeded } from '@utils/fileUtils';
+
 import { collectFilesForProject, findTopLevelProjects } from '../../runner/projectUtils';
 
 import type { FullConfigInternal, FullProjectInternal } from '../../common/config';

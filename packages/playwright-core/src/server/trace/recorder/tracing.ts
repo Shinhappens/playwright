@@ -18,26 +18,27 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+import { getMetainfo } from '@isomorphic/protocolMetainfo';
+import { assert } from '@isomorphic/assert';
+import { monotonicTime } from '@isomorphic/time';
+import { ManualPromise } from '@isomorphic/manualPromise';
+import { eventsHelper  } from '@utils/eventsHelper';
+import { createGuid  } from '@utils/crypto';
+import { getPlaywrightVersion } from '@utils/userAgent';
+import { SerializedFS, removeFolders  } from '@utils/fileUtils';
 import { Snapshotter } from './snapshotter';
-import { methodMetainfo } from '../../../utils/isomorphic/protocolMetainfo';
-import { assert } from '../../../utils/isomorphic/assert';
-import { monotonicTime } from '../../../utils/isomorphic/time';
-import { eventsHelper  } from '../../utils/eventsHelper';
-import { createGuid  } from '../../utils/crypto';
-import { getPlaywrightVersion } from '../../utils/userAgent';
 import { Artifact } from '../../artifact';
 import { BrowserContext } from '../../browserContext';
 import { Dispatcher } from '../../dispatchers/dispatcher';
 import { serializeError } from '../../errors';
-import { SerializedFS, removeFolders  } from '../../utils/fileUtils';
 import { HarTracer } from '../../har/harTracer';
 import { SdkObject } from '../../instrumentation';
 import { Page } from '../../page';
-import { isAbortError } from '../../progress';
+import { isAbortError, nullProgress } from '../../progress';
 
 import type { SnapshotterBlob, SnapshotterDelegate } from './snapshotter';
-import type { NameValue } from '../../../utils/isomorphic/types';
-import type { RegisteredListener } from '../../../utils';
+import type { NameValue } from '@isomorphic/types';
+import type { RegisteredListener } from '@utils/eventsHelper';
 import type { ConsoleMessage } from '../../console';
 import type { Dialog } from '../../dialog';
 import type { Download } from '../../download';
@@ -50,7 +51,7 @@ import type { FrameSnapshot } from '@trace/snapshot';
 import type * as trace from '@trace/trace';
 import type { Progress } from '@protocol/progress';
 import type * as types from '../../types';
-import type { ScreencastListener } from '../../screencast';
+import type { Screencast, ScreencastClient } from '../../screencast';
 
 const version: trace.VERSION = 8;
 
@@ -81,7 +82,7 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
   private _snapshotter?: Snapshotter;
   private _harTracer: HarTracer;
   private _screencastListeners: RegisteredListener[] = [];
-  private _pageScreencastListeners = new Map<Page, ScreencastListener>();
+  private _pageTracingRecorders = new Map<Page, ScreencastTracingRecorder>();
   private _eventListeners: RegisteredListener[] = [];
   private _context: BrowserContext | APIRequestContext;
   // Note: state should only be touched inside API methods, but not inside trace operations.
@@ -92,6 +93,7 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
   private _allResources = new Set<string>();
   private _contextCreatedEvent: trace.ContextCreatedTraceEvent;
   private _pendingHarEntries = new Set<har.Entry>();
+  private _started = false;
 
   constructor(context: BrowserContext | APIRequestContext, tracesDir: string | undefined) {
     super(context, 'tracing');
@@ -134,12 +136,12 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
   async resetForReuse(progress: Progress) {
     // Discard previous chunk if any and ignore any errors there.
     await this.stopChunk(progress, { mode: 'discard' }).catch(() => {});
-    await this.stop(progress);
+    await progress.race(this._stop());
     if (this._snapshotter)
       await progress.race(this._snapshotter.resetForReuse());
   }
 
-  start(options: TracerOptions) {
+  start(progress: Progress, options: TracerOptions) {
     if (this._isStopping)
       throw new Error('Cannot start tracing while stopping');
     if (this._state)
@@ -174,6 +176,7 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
     // Tracing is 10x bigger if we include scripts in every trace.
     if (options.snapshots)
       this._harTracer.start({ omitScripts: !options.live });
+    this._started = true;
   }
 
   async startChunk(progress: Progress, options: { name?: string, title?: string } = {}): Promise<{ traceName: string }> {
@@ -216,7 +219,7 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
     if (this._state.options.screenshots)
       this._startScreencast();
     if (this._state.options.snapshots)
-      await this._snapshotter?.start();
+      await this._snapshotter?.start(progress);
     return { traceName: this._state.traceName };
   }
 
@@ -224,9 +227,10 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
     return this._state?.groupStack.length ? this._state.groupStack[this._state.groupStack.length - 1] : undefined;
   }
 
-  group(name: string, location: { file: string, line?: number, column?: number } | undefined, metadata: CallMetadata) {
+  group(progress: Progress, name: string, location: { file: string, line?: number, column?: number } | undefined) {
     if (!this._state)
       return;
+    const metadata = progress.metadata;
     const stackFrames: StackFrame[] = [];
     const { file, line, column } = location ?? metadata.location ?? {};
     if (file) {
@@ -253,7 +257,11 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
     this._appendTraceEvent(event);
   }
 
-  groupEnd() {
+  groupEnd(progress: Progress) {
+    this._groupEnd();
+  }
+
+  private _groupEnd() {
     if (!this._state)
       return;
     const callId = this._state.groupStack.pop();
@@ -279,15 +287,9 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
 
   private _stopScreencast() {
     eventsHelper.removeEventListeners(this._screencastListeners);
-    if (!(this._context instanceof BrowserContext))
-      return;
-    for (const page of this._context.pages()) {
-      const listener = this._pageScreencastListeners.get(page);
-      if (listener) {
-        page.screencast.stopForTracing(listener);
-        this._pageScreencastListeners.delete(page);
-      }
-    }
+    for (const recorder of this._pageTracingRecorders.values())
+      recorder.dispose();
+    this._pageTracingRecorders.clear();
   }
 
   private _allocateNewTraceFile(state: RecordingState) {
@@ -307,7 +309,11 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
     state.networkFile = newNetworkFile;
   }
 
-  async stop(progress: Progress | undefined) {
+  async stop(progress: Progress) {
+    await progress.race(this._stop());
+  }
+
+  private async _stop() {
     if (!this._state)
       return;
     if (this._isStopping)
@@ -317,8 +323,7 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
     this._closeAllGroups();
     this._harTracer.stop();
     this.flushHarEntries();
-    const promise = progress ? progress.race(this._fs.syncAndGetError()) : this._fs.syncAndGetError();
-    await promise.finally(() => {
+    await this._fs.syncAndGetError().finally(() => {
       this._state = undefined;
     });
   }
@@ -347,10 +352,10 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
 
   private _closeAllGroups() {
     while (this._currentGroupId())
-      this.groupEnd();
+      this._groupEnd();
   }
 
-  async stopChunk(progress: Progress | undefined, params: TracingTracingStopChunkParams): Promise<{ artifact?: Artifact, entries?: NameValue[] }> {
+  async stopChunk(progress: Progress, params: TracingTracingStopChunkParams): Promise<{ artifact?: Artifact, entries?: NameValue[] }> {
     if (this._isStopping)
       throw new Error(`Tracing is already stopping`);
     this._isStopping = true;
@@ -404,8 +409,12 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
       this._fs.zip(entries, zipFileName);
 
     // Make sure all file operations complete.
-    const promise = progress ? progress.race(this._fs.syncAndGetError()) : this._fs.syncAndGetError();
-    const error = await promise.catch(e => e);
+    let error: Error | undefined;
+    try {
+      await progress.race(this._fs.syncAndGetError());
+    } catch (e) {
+      error = e as Error;
+    }
 
     this._isStopping = false;
     if (this._state)
@@ -435,8 +444,19 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
     await this._snapshotter?.captureSnapshot(sdkObject.attribution.page, metadata.id, snapshotName).catch(() => {});
   }
 
-  private _shouldCaptureSnapshot(sdkObject: SdkObject, metadata: CallMetadata) {
-    return !!this._snapshotter?.started() && shouldCaptureSnapshot(metadata) && !!sdkObject.attribution.page;
+  private _shouldCaptureSnapshot(sdkObject: SdkObject, metadata: CallMetadata, phase: 'before' | 'after' | 'input') {
+    if (!sdkObject.attribution.page || !this._snapshotter?.started())
+      return;
+
+    const metainfo = getMetainfo(metadata);
+    if (!metainfo?.snapshot)
+      return false;
+
+    switch (phase) {
+      case 'before': return !metainfo.input || !!metainfo.isAutoWaiting;
+      case 'input': return !!metainfo.input;
+      case 'after': return true;
+    }
   }
 
   onBeforeCall(sdkObject: SdkObject, metadata: CallMetadata, parentId?: string) {
@@ -444,8 +464,8 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
     const event = createBeforeActionTraceEvent(metadata, parentId ?? this._currentGroupId());
     if (!event)
       return Promise.resolve();
-    sdkObject.attribution.page?.screencast.temporarilyDisableThrottling();
-    if (this._shouldCaptureSnapshot(sdkObject, metadata))
+    this._temporarilyDisableThrottling(sdkObject.attribution.page);
+    if (this._shouldCaptureSnapshot(sdkObject, metadata, 'before'))
       event.beforeSnapshot = `before@${metadata.id}`;
     this._state?.callIds.add(metadata.id);
     this._appendTraceEvent(event);
@@ -459,8 +479,8 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
     const event = createInputActionTraceEvent(metadata);
     if (!event)
       return Promise.resolve();
-    sdkObject.attribution.page?.screencast.temporarilyDisableThrottling();
-    if (this._shouldCaptureSnapshot(sdkObject, metadata))
+    this._temporarilyDisableThrottling(sdkObject.attribution.page);
+    if (this._shouldCaptureSnapshot(sdkObject, metadata, 'input'))
       event.inputSnapshot = `input@${metadata.id}`;
     this._appendTraceEvent(event);
     return this._captureSnapshot(event.inputSnapshot, sdkObject, metadata);
@@ -486,8 +506,8 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
     const event = createAfterActionTraceEvent(metadata);
     if (!event)
       return Promise.resolve();
-    sdkObject.attribution.page?.screencast.temporarilyDisableThrottling();
-    if (this._shouldCaptureSnapshot(sdkObject, metadata))
+    this._temporarilyDisableThrottling(sdkObject.attribution.page);
+    if (this._shouldCaptureSnapshot(sdkObject, metadata, 'after'))
       event.afterSnapshot = `after@${metadata.id}`;
     this._appendTraceEvent(event);
     return this._captureSnapshot(event.afterSnapshot, sdkObject, metadata);
@@ -585,6 +605,13 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
     this._appendTraceEvent(event);
   }
 
+  dispose(params: TracingTracingStopChunkParams) {
+    // Avoid protocol calls for the closed context.
+    if (this._started)
+      this.stopChunk(nullProgress, params).then(() => this._stop()).catch(() => {});
+    this._started = false;
+  }
+
   private _onPageError(error: Error, page: Page) {
     const event: trace.EventTraceEvent = {
       type: 'event',
@@ -597,9 +624,14 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
     this._appendTraceEvent(event);
   }
 
+  private _temporarilyDisableThrottling(page: Page | undefined) {
+    if (page)
+      this._pageTracingRecorders.get(page)?.temporarilyDisableThrottling();
+  }
+
   private _startScreencastInPage(page: Page) {
     const prefix = page.guid;
-    const listener = (params: types.ScreencastFrame) => {
+    const onFrame = (params: types.ScreencastFrame) => {
       const suffix = Date.now();
       const sha1 = `${prefix}-${suffix}.jpeg`;
       const event: trace.ScreencastFrameTraceEvent = {
@@ -615,8 +647,7 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
       this._appendResource(sha1, params.buffer);
       this._appendTraceEvent(event);
     };
-    this._pageScreencastListeners.set(page, listener);
-    page.screencast.startForTracing(listener);
+    this._pageTracingRecorders.set(page, new ScreencastTracingRecorder(page.screencast, onFrame));
   }
 
   private _appendTraceEvent(event: trace.TraceEvent) {
@@ -657,11 +688,6 @@ function visitTraceEvent(object: any, sha1s: Set<string>): any {
     return result;
   }
   return object;
-}
-
-function shouldCaptureSnapshot(metadata: CallMetadata): boolean {
-  const metainfo = methodMetainfo.get(metadata.type + '.' + metadata.method);
-  return !!metainfo?.snapshot;
 }
 
 function createBeforeActionTraceEvent(metadata: CallMetadata, parentId?: string): trace.BeforeActionTraceEvent | null {
@@ -715,4 +741,60 @@ function createAfterActionTraceEvent(metadata: CallMetadata): trace.AfterActionT
     result: metadata.result,
     point: metadata.point,
   };
+}
+
+const throttledRate = 200;
+const unthrottleDuration = 500;
+
+class ScreencastTracingRecorder {
+  private _screencast: Screencast;
+  private _client: ScreencastClient;
+  private _unthrottledUntil = 0;
+  private _pendingAck: ManualPromise<void> | undefined;
+  private _timer: NodeJS.Timeout | undefined;
+
+  constructor(screencast: Screencast, onFrame: (frame: types.ScreencastFrame) => void) {
+    this._screencast = screencast;
+    this._client = {
+      onFrame: (frame: types.ScreencastFrame) => {
+        const time = monotonicTime();
+
+        if (time < this._unthrottledUntil) {
+          onFrame(frame);
+          return;
+        }
+
+        // We are throttling, but frames are coming => there is another client.
+        if (this._pendingAck)
+          return;
+
+        onFrame(frame);
+        this._pendingAck = new ManualPromise<void>();
+        this._timer = setTimeout(() => this._clearPendingAck(), throttledRate);
+        return this._pendingAck;
+      },
+      gracefulClose: () => this.dispose(),
+      dispose: () => this.dispose(),
+    };
+    this._screencast.addClient(this._client);
+  }
+
+  dispose() {
+    this._screencast.removeClient(this._client);
+    this._clearPendingAck();
+  }
+
+  temporarilyDisableThrottling() {
+    this._unthrottledUntil = monotonicTime() + unthrottleDuration;
+    this._clearPendingAck();
+  }
+
+  private _clearPendingAck() {
+    this._pendingAck?.resolve();
+    this._pendingAck = undefined;
+    if (this._timer) {
+      clearTimeout(this._timer);
+      this._timer = undefined;
+    }
+  }
 }

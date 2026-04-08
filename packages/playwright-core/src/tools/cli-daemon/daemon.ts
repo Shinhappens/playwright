@@ -16,14 +16,11 @@
 
 import fs from 'fs';
 import net from 'net';
-import os from 'os';
 import path from 'path';
 
-import { calculateSha1 } from '../../utils';
-import { debug } from '../../utilsBundle';
-
-import { decorateServer } from '../../server/utils/network';
-import { gracefullyProcessExitDoNotHang } from '../../server/utils/processLauncher';
+import { decorateServer } from '@utils/network';
+import { makeSocketPath } from '@utils/fileUtils';
+import { gracefullyProcessExitDoNotHang } from '@utils/processLauncher';
 
 import { BrowserBackend } from '../backend/browserBackend';
 import { browserTools } from '../backend/tools';
@@ -31,14 +28,12 @@ import { parseCommand } from './command';
 import { commands } from './commands';
 
 import { SocketConnection } from '../utils/socketConnection';
-import { createClientInfo } from '../cli-client/registry';
-
 import type * as playwright from '../../..';
 import type { SessionConfig, ClientInfo } from '../cli-client/registry';
 import type { CallToolRequest, CallToolResult } from '../backend/tool';
 import type { ContextConfig } from '../backend/context';
-
-const daemonDebug = debug('pw:daemon');
+import type { BrowserInfo } from '../../serverRegistry';
+import type { ClientInfo as McpClientInfo } from '../utils/mcp/server';
 
 async function socketExists(socketPath: string): Promise<boolean> {
   try {
@@ -53,47 +48,39 @@ async function socketExists(socketPath: string): Promise<boolean> {
 export async function startCliDaemonServer(
   sessionName: string,
   browserContext: playwright.BrowserContext,
-  contextConfig: ContextConfig = {},
-  clientInfo = createClientInfo(),
-  options?: {
+  browserInfo: BrowserInfo,
+  contextConfig: ContextConfig,
+  clientInfo: ClientInfo,
+  mcpClientInfo: McpClientInfo,
+  options: {
     persistent?: boolean,
     exitOnClose?: boolean,
   }
 ): Promise<string> {
-  const sessionConfig = createSessionConfig(clientInfo, sessionName, browserContext, options);
+  const sessionConfig = createSessionConfig(clientInfo, sessionName, browserInfo, options);
   const { socketPath } = sessionConfig;
 
   // Clean up existing socket file on Unix
   if (process.platform !== 'win32' && await socketExists(socketPath)) {
-    daemonDebug(`Socket already exists, removing: ${socketPath}`);
     try {
       await fs.promises.unlink(socketPath);
     } catch (error) {
-      daemonDebug(`Failed to remove existing socket: ${error}`);
       throw error;
     }
   }
 
   const backend = new BrowserBackend(contextConfig, browserContext, browserTools);
-  await backend.initialize({ cwd: process.cwd() });
+  await backend.initialize(mcpClientInfo);
 
-  await fs.promises.mkdir(path.dirname(socketPath), { recursive: true });
-
-  if (browserContext.isClosedOrClosing())
+  if (browserContext.isClosed())
     throw new Error('Browser context was closed before the daemon could start');
 
   const server = net.createServer(socket => {
-    daemonDebug('new client connection');
     const connection = new SocketConnection(socket);
-    connection.onclose = () => {
-      daemonDebug('client disconnected');
-    };
     connection.onmessage = async message => {
       const { id, method, params } = message;
       try {
-        daemonDebug('received command', method);
         if (method === 'stop') {
-          daemonDebug('stop command received, shutting down');
           await deleteSessionFile(clientInfo, sessionConfig);
           const sendAck = async () => connection.send({ id, result: 'ok' }).catch(() => {});
           if (options?.exitOnClose)
@@ -102,15 +89,13 @@ export async function startCliDaemonServer(
             await sendAck();
         } else if (method === 'run') {
           const { toolName, toolParams } = parseCliCommand(params.args);
-          if (params.cwd)
-            toolParams._meta = { cwd: params.cwd };
+          toolParams._meta = { cwd: params.cwd, raw: params.raw };
           const response = await backend.callTool(toolName, toolParams);
           await connection.send({ id, result: formatResult(response) });
         } else {
           throw new Error(`Unknown method: ${method}`);
         }
       } catch (e) {
-        daemonDebug('command failed', e);
         const error = process.env.PWDEBUGIMPL ? (e as Error).stack || (e as Error).message : (e as Error).message;
         connection.send({ id, error }).catch(() => {});
       }
@@ -125,10 +110,7 @@ export async function startCliDaemonServer(
   }));
 
   await new Promise<void>((resolve, reject) => {
-    server.on('error', (error: NodeJS.ErrnoException) => {
-      daemonDebug(`server error: ${error.message}`);
-      reject(error);
-    });
+    server.on('error', reject);
     server.listen(socketPath, () => resolve());
   });
 
@@ -164,19 +146,13 @@ function parseCliCommand(args: Record<string, string> & { _: string[] }): { tool
 }
 
 function daemonSocketPath(clientInfo: ClientInfo, sessionName: string): string {
-  const userNameHash = calculateSha1(process.env.USERNAME || 'default').slice(0, 8);
-  const socketName = `${sessionName}-${userNameHash}.sock`;
-  if (process.platform === 'win32')
-    return `\\\\.\\pipe\\${clientInfo.workspaceDirHash}-${socketName}`;
-  const socketsDir = process.env.PLAYWRIGHT_DAEMON_SOCKETS_DIR || path.join(os.tmpdir(), 'playwright-cli');
-  return path.join(socketsDir, clientInfo.workspaceDirHash, socketName);
+  return makeSocketPath('cli', `${clientInfo.workspaceDirHash}-${sessionName}`);
 }
 
-function createSessionConfig(clientInfo: ClientInfo, sessionName: string, browserContext: playwright.BrowserContext, options: {
+function createSessionConfig(clientInfo: ClientInfo, sessionName: string, browserInfo: BrowserInfo, options: {
   persistent?: boolean,
   exitOnStop?: boolean,
 } = {}): SessionConfig {
-  const browser = browserContext.browser()!;
   return {
     name: sessionName,
     version: clientInfo.version,
@@ -185,9 +161,9 @@ function createSessionConfig(clientInfo: ClientInfo, sessionName: string, browse
     workspaceDir: clientInfo.workspaceDir,
     cli: { persistent: options.persistent },
     browser: {
-      browserName: browser.browserType().name(),
-      launchOptions: browser.launchOptions(),
-      userDataDir: browser.userDataDir() ?? undefined,
+      browserName: browserInfo.browserName,
+      launchOptions: browserInfo.launchOptions,
+      userDataDir: browserInfo.userDataDir,
     },
   };
 }

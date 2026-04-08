@@ -15,7 +15,11 @@
  */
 
 import { errors } from 'playwright-core';
-import { getPackageManagerExecCommand, monotonicTime, raceAgainstDeadline, currentZone } from 'playwright-core/lib/utils';
+
+import { monotonicTime } from '@isomorphic/time';
+import { raceAgainstDeadline } from '@isomorphic/timeoutRunner';
+import { getPackageManagerExecCommand } from '@utils/env';
+import { currentZone } from '@utils/zones';
 
 import { currentTestInfo, currentlyLoadingFileSuite, setCurrentlyLoadingFileSuite } from './globals';
 import { Suite, TestCase } from './test';
@@ -56,6 +60,7 @@ export class TestTypeImpl {
     test.skip = wrapFunctionWithLocation(this._modifier.bind(this, 'skip'));
     test.fixme = wrapFunctionWithLocation(this._modifier.bind(this, 'fixme'));
     test.fail = wrapFunctionWithLocation(this._modifier.bind(this, 'fail'));
+    test.abort = wrapFunctionWithLocation(this._abort.bind(this));
     test.fail.only = wrapFunctionWithLocation(this._createTest.bind(this, 'fail.only'));
     test.slow = wrapFunctionWithLocation(this._modifier.bind(this, 'slow'));
     test.setTimeout = wrapFunctionWithLocation(this._setTimeout.bind(this));
@@ -241,6 +246,13 @@ export class TestTypeImpl {
     testInfo._modifier(type, location, modifierArgs as [any, any]);
   }
 
+  private _abort(location: Location, message?: string) {
+    const testInfo = currentTestInfo();
+    if (!testInfo)
+      throw new Error(`test.abort() can only be called inside a test or fixture`);
+    testInfo._abort(location, message);
+  }
+
   private _setTimeout(location: Location, timeout: number) {
     const suite = currentlyLoadingFileSuite();
     if (suite) {
@@ -265,6 +277,7 @@ export class TestTypeImpl {
     const testInfo = currentTestInfo();
     if (!testInfo)
       throw new Error(`test.step() can only be called from a test`);
+    await testInfo._onUserStepBegin?.(title);
     const step = testInfo._addStep({ category: 'test.step', title, location: options.location, box: options.box });
     return await currentZone().with('stepZone', step).run(async () => {
       try {
@@ -287,6 +300,8 @@ export class TestTypeImpl {
       } catch (error) {
         step.complete({ error });
         throw error;
+      } finally {
+        await testInfo._onUserStepEnd?.();
       }
     });
   }

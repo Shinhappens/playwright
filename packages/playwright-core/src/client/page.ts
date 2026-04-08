@@ -15,6 +15,12 @@
  * limitations under the License.
  */
 
+import { assert } from '@isomorphic/assert';
+import { headersObjectToArray } from '@isomorphic/headers';
+import { trimStringWithEllipsis  } from '@isomorphic/stringUtils';
+import { urlMatches, urlMatchesEqual } from '@isomorphic/urlMatch';
+import { LongStandingScope } from '@isomorphic/manualPromise';
+import { isObject, isRegExp, isString } from '@isomorphic/rtti';
 import { Artifact } from './artifact';
 import { ChannelOwner } from './channelOwner';
 import { evaluationScript } from './clientHelper';
@@ -35,13 +41,7 @@ import { Screencast } from './screencast';
 import { Waiter } from './waiter';
 import { Worker } from './worker';
 import { TimeoutSettings } from './timeoutSettings';
-import { assert } from '../utils/isomorphic/assert';
 import { mkdirIfNeeded } from './fileUtils';
-import { headersObjectToArray } from '../utils/isomorphic/headers';
-import { trimStringWithEllipsis  } from '../utils/isomorphic/stringUtils';
-import { urlMatches, urlMatchesEqual } from '../utils/isomorphic/urlMatch';
-import { LongStandingScope } from '../utils/isomorphic/manualPromise';
-import { isObject, isRegExp, isString } from '../utils/isomorphic/rtti';
 import { ConsoleMessage } from './consoleMessage';
 import type { BrowserContext } from './browserContext';
 import type { Clock } from './clock';
@@ -52,8 +52,8 @@ import type { RouteHandlerCallback, WebSocketRouteHandlerCallback } from './netw
 import type { FilePayload, Headers, LifecycleEvent, SelectOption, SelectOptionOptions, Size, TimeoutOptions, WaitForEventOptions, WaitForFunctionOptions } from './types';
 import type * as structs from '../../types/structs';
 import type * as api from '../../types/types';
-import type { ByRoleOptions } from '../utils/isomorphic/locatorUtils';
-import type { URLMatch } from '../utils/isomorphic/urlMatch';
+import type { ByRoleOptions } from '@isomorphic/locatorUtils';
+import type { URLMatch } from '@isomorphic/urlMatch';
 import type * as channels from '@protocol/channels';
 
 type PDFOptions = Omit<channels.PagePdfParams, 'width' | 'height' | 'margin'> & {
@@ -79,6 +79,7 @@ export type ExpectScreenshotOptions = Omit<channels.PageExpectScreenshotOptions,
 export class Page extends ChannelOwner<channels.PageChannel> implements api.Page {
   private _browserContext: BrowserContext;
   _ownedContext: BrowserContext | undefined;
+  _apiName = 'Page';
 
   private _mainFrame: Frame;
   private _frames = new Set<Frame>();
@@ -95,12 +96,12 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
   readonly request: APIRequestContext;
   readonly touchscreen: Touchscreen;
   readonly clock: Clock;
+  readonly screencast: Screencast;
 
 
   readonly _bindings = new Map<string, (source: structs.BindingSource, ...args: any[]) => any>();
   readonly _timeoutSettings: TimeoutSettings;
   private _video: Video;
-  private _screencast: Screencast;
   readonly _opener: Page | null;
   private _closeReason: string | undefined;
   _closeWasCalled: boolean = false;
@@ -135,7 +136,7 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
     this._closed = initializer.isClosed;
     this._opener = Page.fromNullable(initializer.opener);
     this._video = new Video(this, this._connection, initializer.video ? Artifact.from(initializer.video) : undefined);
-    this._screencast = new Screencast(this);
+    this.screencast = new Screencast(this);
 
     this._channel.on('bindingCall', ({ binding }) => this._onBinding(BindingCall.from(binding)));
     this._channel.on('close', () => this._onClose());
@@ -191,7 +192,7 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
     const routeHandlers = this._routes.slice();
     for (const routeHandler of routeHandlers) {
       // If the page was closed we stall all requests right away.
-      if (this._closeWasCalled || this._browserContext.isClosedOrClosing())
+      if (this._closeWasCalled || this._browserContext.isClosed())
         return;
       if (!routeHandler.matches(route.request().url()))
         continue;
@@ -281,12 +282,13 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
     this._timeoutSettings.setDefaultTimeout(timeout);
   }
 
-  video(): Video {
+  video(): Video | null {
+    // Note: we are creating Video object lazily, because we do not know
+    // BrowserContextOptions when constructing the page - it is assigned
+    // too late during launchPersistentContext.
+    if (!this._browserContext._options.recordVideo)
+      return null;
     return this._video;
-  }
-
-  screencast(): Screencast {
-    return this._screencast;
   }
 
   async pickLocator(): Promise<Locator> {
@@ -673,7 +675,7 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
     await this._channel.clearConsoleMessages();
   }
 
-  async consoleMessages(options?: { filter?: 'all' | 'sinceNavigation' }): Promise<ConsoleMessage[]> {
+  async consoleMessages(options?: { filter?: 'all' | 'since-navigation' }): Promise<ConsoleMessage[]> {
     const { messages } = await this._channel.consoleMessages({ filter: options?.filter });
     return messages.map(message => new ConsoleMessage(this._platform, message, this, null));
   }
@@ -682,7 +684,7 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
     await this._channel.clearPageErrors();
   }
 
-  async pageErrors(options?: { filter?: 'all' | 'sinceNavigation' }): Promise<Error[]> {
+  async pageErrors(options?: { filter?: 'all' | 'since-navigation' }): Promise<Error[]> {
     const { errors } = await this._channel.pageErrors({ filter: options?.filter });
     return errors.map(error => parseError(error));
   }
@@ -855,8 +857,9 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
     return result.pdf;
   }
 
-  async snapshotForAI(options: TimeoutOptions & { track?: string } = {}): Promise<{ full: string, incremental?: string }> {
-    return await this._channel.snapshotForAI({ timeout: this._timeoutSettings.timeout(options), track: options.track });
+  async ariaSnapshot(options: TimeoutOptions & { mode?: 'ai' | 'default', depth?: number, _track?: string } = {}): Promise<string> {
+    const result = await this.mainFrame()._channel.ariaSnapshot({ timeout: this._timeoutSettings.timeout(options), track: options._track, mode: options.mode, depth: options.depth });
+    return result.snapshot;
   }
 
   async _setDockTile(image: Buffer) {

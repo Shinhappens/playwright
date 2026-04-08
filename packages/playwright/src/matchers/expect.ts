@@ -14,13 +14,11 @@
  * limitations under the License.
  */
 
-import {
-  captureRawStack,
-  createGuid,
-  currentZone,
-  escapeWithQuotes,
-  isString,
-  pollAgainstDeadline } from 'playwright-core/lib/utils';
+import { captureRawStack } from '@isomorphic/stackTrace';
+import { escapeWithQuotes, isString } from '@isomorphic/stringUtils';
+import { pollAgainstDeadline } from '@isomorphic/timeoutRunner';
+import { createGuid } from '@utils/crypto';
+import { currentZone } from '@utils/zones';
 
 import { ExpectError, isJestError } from './matcherHint';
 import {

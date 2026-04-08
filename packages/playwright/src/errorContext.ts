@@ -17,7 +17,10 @@
 import fs from 'fs';
 import path from 'path';
 
-import { parseErrorStack, stripAnsiEscapes } from 'playwright-core/lib/utils';
+import { parseErrorStack } from '@isomorphic/stackTrace';
+import { stripAnsiEscapes } from '@isomorphic/stringUtils';
+
+import { relativeFilePath } from './util';
 
 import type { TestInfoError } from '../types/test';
 
@@ -46,7 +49,7 @@ export function buildErrorContext(options: {
     '# Test info',
     '',
     `- Name: ${titlePath.join(' >> ')}`,
-    `- Location: ${location.file}:${location.line}:${location.column}`,
+    `- Location: ${relativeFilePath(location.file)}:${location.line}:${location.column}`,
   ];
 
   if (meaningfulErrors.length) {

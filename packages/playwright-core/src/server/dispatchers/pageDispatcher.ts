@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { deserializeURLMatch, urlMatches } from '@isomorphic/urlMatch';
 import { Page, Worker } from '../page';
 import { Dispatcher } from './dispatcher';
 import { parseError, serializeError } from '../errors';
@@ -27,9 +28,10 @@ import { RouteDispatcher, WebSocketDispatcher } from './networkDispatchers';
 import { WebSocketRouteDispatcher } from './webSocketRouteDispatcher';
 import { DisposableDispatcher } from './disposableDispatcher';
 import { SdkObject } from '../instrumentation';
-import { deserializeURLMatch, urlMatches } from '../../utils/isomorphic/urlMatch';
 import { Recorder } from '../recorder';
 import { disposeAll } from '../disposable';
+import { VideoRecorder } from '../videoRecorder';
+import { nullProgress } from '../progress';
 
 import type { Artifact } from '../artifact';
 import type { BrowserContext } from '../browserContext';
@@ -44,9 +46,9 @@ import type { InitScript } from '../page';
 import type { Disposable } from '../disposable';
 import type * as channels from '@protocol/channels';
 import type { Progress } from '@protocol/progress';
-import type { URLMatch } from '../../utils/isomorphic/urlMatch';
+import type { URLMatch } from '@isomorphic/urlMatch';
 import type { ScreencastFrame } from '../types';
-import type { ScreencastListener } from '../screencast';
+import type { ScreencastClient } from '../screencast';
 
 export class PageDispatcher extends Dispatcher<Page, channels.PageChannel, BrowserContextDispatcher> implements channels.PageChannel {
   _type_EventTarget = true;
@@ -61,7 +63,8 @@ export class PageDispatcher extends Dispatcher<Page, channels.PageChannel, Brows
   private _locatorHandlers = new Set<number>();
   private _jsCoverageActive = false;
   private _cssCoverageActive = false;
-  private _screencastListener: ScreencastListener | null = null;
+  private _screencastClient: ScreencastClient | undefined;
+  private _videoRecorder: VideoRecorder | undefined;
 
   static from(parentScope: BrowserContextDispatcher, page: Page): PageDispatcher {
     return PageDispatcher.fromNullable(parentScope, page)!;
@@ -161,7 +164,7 @@ export class PageDispatcher extends Dispatcher<Page, channels.PageChannel, Brows
   }
 
   async requestGC(params: channels.PageRequestGCParams, progress: Progress): Promise<channels.PageRequestGCResult> {
-    await progress.race(this._page.requestGC());
+    await this._page.requestGC(progress);
   }
 
   async registerLocatorHandler(params: channels.PageRegisterLocatorHandlerParams, progress: Progress): Promise<channels.PageRegisterLocatorHandlerResult> {
@@ -194,7 +197,7 @@ export class PageDispatcher extends Dispatcher<Page, channels.PageChannel, Brows
   }
 
   async addInitScript(params: channels.PageAddInitScriptParams, progress: Progress): Promise<channels.PageAddInitScriptResult> {
-    const initScript = await this._page.addInitScript(params.source);
+    const initScript = await this._page.addInitScript(progress, params.source);
     this._disposables.push(initScript);
     return { disposable: new DisposableDispatcher(this, initScript) };
   }
@@ -205,7 +208,7 @@ export class PageDispatcher extends Dispatcher<Page, channels.PageChannel, Brows
       // Note: it is important to remove the interceptor when there are no patterns,
       // because that disables the slow-path interception in the browser itself.
       if (hadMatchers)
-        await this._page.removeRequestInterceptor(this._requestInterceptor);
+        await progress.race(this._page.removeRequestInterceptor(this._requestInterceptor));
       this._interceptionUrlMatchers = [];
     } else {
       this._interceptionUrlMatchers = params.patterns.map(deserializeURLMatch);
@@ -247,13 +250,13 @@ export class PageDispatcher extends Dispatcher<Page, channels.PageChannel, Brows
   async close(params: channels.PageCloseParams, progress: Progress): Promise<void> {
     if (!params.runBeforeUnload)
       progress.metadata.potentiallyClosesScope = true;
-    await this._page.close(params);
+    await this._page.close(progress, params);
   }
 
   async updateSubscription(params: channels.PageUpdateSubscriptionParams, progress: Progress): Promise<void> {
     // Note: progress is ignored because this operation is not cancellable and should not block in the browser anyway.
     if (params.event === 'fileChooser')
-      await this._page.setFileChooserInterceptedBy(params.enabled, this);
+      await this._page.setFileChooserInterceptedBy(progress, params.enabled, this);
     if (params.enabled)
       this._subscriptions.add(params.event);
     else
@@ -261,23 +264,23 @@ export class PageDispatcher extends Dispatcher<Page, channels.PageChannel, Brows
   }
 
   async keyboardDown(params: channels.PageKeyboardDownParams, progress: Progress): Promise<void> {
-    await this._page.keyboard.down(progress, params.key);
+    await this._page.keyboard.apiDown(progress, params.key);
   }
 
   async keyboardUp(params: channels.PageKeyboardUpParams, progress: Progress): Promise<void> {
-    await this._page.keyboard.up(progress, params.key);
+    await this._page.keyboard.apiUp(progress, params.key);
   }
 
   async keyboardInsertText(params: channels.PageKeyboardInsertTextParams, progress: Progress): Promise<void> {
-    await this._page.keyboard.insertText(progress, params.text);
+    await this._page.keyboard.apiInsertText(progress, params.text);
   }
 
   async keyboardType(params: channels.PageKeyboardTypeParams, progress: Progress): Promise<void> {
-    await this._page.keyboard.type(progress, params.text, params);
+    await this._page.keyboard.apiType(progress, params.text, params);
   }
 
   async keyboardPress(params: channels.PageKeyboardPressParams, progress: Progress): Promise<void> {
-    await this._page.keyboard.press(progress, params.key, params);
+    await this._page.keyboard.apiPress(progress, params.key, params);
   }
 
   async clearConsoleMessages(params: channels.PageClearConsoleMessagesParams, progress: Progress): Promise<channels.PageClearConsoleMessagesResult> {
@@ -301,32 +304,28 @@ export class PageDispatcher extends Dispatcher<Page, channels.PageChannel, Brows
   }
 
   async mouseMove(params: channels.PageMouseMoveParams, progress: Progress): Promise<void> {
-    progress.metadata.point = { x: params.x, y: params.y };
-    await this._page.mouse.move(progress, params.x, params.y, params);
+    await this._page.mouse.apiMove(progress, params.x, params.y, params);
   }
 
   async mouseDown(params: channels.PageMouseDownParams, progress: Progress): Promise<void> {
-    progress.metadata.point = this._page.mouse.currentPoint();
-    await this._page.mouse.down(progress, params);
+    await this._page.mouse.apiDown(progress, params);
   }
 
   async mouseUp(params: channels.PageMouseUpParams, progress: Progress): Promise<void> {
-    progress.metadata.point = this._page.mouse.currentPoint();
-    await this._page.mouse.up(progress, params);
+    await this._page.mouse.apiUp(progress, params);
   }
 
   async mouseClick(params: channels.PageMouseClickParams, progress: Progress): Promise<void> {
-    progress.metadata.point = { x: params.x, y: params.y };
-    await this._page.mouse.click(progress, params.x, params.y, params);
+    await this._page.mouse.apiClick(progress, params.x, params.y, params);
   }
 
   async mouseWheel(params: channels.PageMouseWheelParams, progress: Progress): Promise<void> {
-    await this._page.mouse.wheel(progress, params.deltaX, params.deltaY);
+    await this._page.mouse.apiWheel(progress, params.deltaX, params.deltaY);
   }
 
   async touchscreenTap(params: channels.PageTouchscreenTapParams, progress: Progress): Promise<void> {
     progress.metadata.point = { x: params.x, y: params.y };
-    await this._page.touchscreen.tap(progress, params.x, params.y);
+    await this._page.touchscreen.apiTap(progress, params.x, params.y);
   }
 
   async pdf(params: channels.PagePdfParams, progress: Progress): Promise<channels.PagePdfResult> {
@@ -344,53 +343,81 @@ export class PageDispatcher extends Dispatcher<Page, channels.PageChannel, Brows
     return { requests: this._page.networkRequests().map(request => RequestDispatcher.from(this.parentScope(), request)) };
   }
 
-  async snapshotForAI(params: channels.PageSnapshotForAIParams, progress: Progress): Promise<channels.PageSnapshotForAIResult> {
-    return await this._page.snapshotForAI(progress, params);
-  }
-
   async bringToFront(params: channels.PageBringToFrontParams, progress: Progress): Promise<void> {
-    await progress.race(this._page.bringToFront());
+    await this._page.bringToFront(progress);
   }
 
   async pickLocator(params: channels.PagePickLocatorParams, progress: Progress): Promise<channels.PagePickLocatorResult> {
-    const recorder = await Recorder.forContext(this._page.browserContext, { omitCallTracking: true, hideToolbar: true });
+    const recorder = await progress.race(Recorder.forContext(this._page.browserContext, { omitCallTracking: true, hideToolbar: true }));
     const selector = await recorder.pickLocator(progress, this._page);
     return { selector };
   }
 
   async cancelPickLocator(params: channels.PageCancelPickLocatorParams, progress: Progress): Promise<void> {
-    const recorder = await Recorder.existingForContext(this._page.browserContext);
-    await recorder?.setMode('none');
+    const recorder = await progress.race(Recorder.existingForContext(this._page.browserContext));
+    if (recorder)
+      await progress.race(recorder.setMode('none'));
   }
 
-  async startScreencast(params: channels.PageStartScreencastParams, progress?: Progress): Promise<channels.PageStartScreencastResult> {
-    if (this._screencastListener)
+  async screencastShowOverlay(params: channels.PageScreencastShowOverlayParams): Promise<channels.PageScreencastShowOverlayResult> {
+    const id = await this._page.overlay.show(params.html, params.duration);
+    return { id };
+  }
+
+  async screencastRemoveOverlay(params: channels.PageScreencastRemoveOverlayParams): Promise<channels.PageScreencastRemoveOverlayResult> {
+    await this._page.overlay.remove(params.id);
+  }
+
+  async screencastChapter(params: channels.PageScreencastChapterParams): Promise<channels.PageScreencastChapterResult> {
+    await this._page.overlay.chapter(params);
+  }
+
+  async screencastSetOverlayVisible(params: channels.PageScreencastSetOverlayVisibleParams): Promise<channels.PageScreencastSetOverlayVisibleResult> {
+    await this._page.overlay.setVisible(params.visible);
+  }
+
+  async screencastShowActions(params: channels.PageScreencastShowActionsParams): Promise<channels.PageScreencastShowActionsResult> {
+    this._page.screencast.showActions({ duration: params.duration, position: params.position, fontSize: params.fontSize });
+  }
+
+  async screencastHideActions(): Promise<channels.PageScreencastHideActionsResult> {
+    this._page.screencast.hideActions();
+  }
+
+  async screencastStart(params: channels.PageScreencastStartParams, progress?: Progress): Promise<channels.PageScreencastStartResult> {
+    if (this._screencastClient || this._videoRecorder)
       throw new Error('Screencast is already running');
-    const size = params.maxSize || { width: 800, height: 800 };
-    this._screencastListener = (frame: ScreencastFrame) => {
-      this._dispatchEvent('screencastFrame', { data: frame.buffer });
-    };
-    await this._page.screencast.startScreencast(this._screencastListener, { quality: 90, width: size.width, height: size.height });
+
+    if (params.sendFrames) {
+      this._screencastClient = {
+        onFrame: (frame: ScreencastFrame) => {
+          this._dispatchEvent('screencastFrame', { data: frame.buffer });
+        },
+        dispose: () => {},
+        size: params.size,
+        quality: params.quality,
+      };
+      this._page.screencast.addClient(this._screencastClient);
+    }
+
+    let artifact: Artifact | undefined;
+    if (params.record) {
+      this._videoRecorder = new VideoRecorder(this._page.screencast);
+      artifact = this._videoRecorder.start(params);
+    }
+    return { artifact: artifact ? createVideoDispatcher(this.parentScope(), artifact) : undefined };
   }
 
-  async stopScreencast(params: channels.PageStopScreencastParams, progress?: Progress): Promise<channels.PageStopScreencastResult> {
-    await this._stopScreencast();
-  }
+  async screencastStop(params: channels.PageScreencastStopParams, progress?: Progress): Promise<channels.PageScreencastStopResult> {
+    if (this._videoRecorder) {
+      await this._videoRecorder.stop();
+      this._videoRecorder = undefined;
+    }
 
-  private async _stopScreencast() {
-    const listener = this._screencastListener;
-    this._screencastListener = null;
-    if (listener)
-      await this._page.screencast.stopScreencast(listener);
-  }
-
-  async videoStart(params: channels.PageVideoStartParams, progress: Progress): Promise<channels.PageVideoStartResult> {
-    const artifact = await this._page.screencast.startExplicitVideoRecording(params);
-    return { artifact: createVideoDispatcher(this.parentScope(), artifact) };
-  }
-
-  async videoStop(params: channels.PageVideoStopParams, progress: Progress): Promise<channels.PageVideoStopResult> {
-    await this._page.screencast.stopExplicitVideoRecording();
+    const client = this._screencastClient;
+    this._screencastClient = undefined;
+    if (client)
+      this._page.screencast.removeClient(client);
   }
 
   async startJSCoverage(params: channels.PageStartJSCoverageParams, progress: Progress): Promise<void> {
@@ -402,7 +429,7 @@ export class PageDispatcher extends Dispatcher<Page, channels.PageChannel, Brows
   async stopJSCoverage(params: channels.PageStopJSCoverageParams, progress: Progress): Promise<channels.PageStopJSCoverageResult> {
     this._jsCoverageActive = false;
     const coverage = this._page.coverage as CRCoverage;
-    return await coverage.stopJSCoverage();
+    return await progress.race(coverage.stopJSCoverage());
   }
 
   async startCSSCoverage(params: channels.PageStartCSSCoverageParams, progress: Progress): Promise<void> {
@@ -414,7 +441,7 @@ export class PageDispatcher extends Dispatcher<Page, channels.PageChannel, Brows
   async stopCSSCoverage(params: channels.PageStopCSSCoverageParams, progress: Progress): Promise<channels.PageStopCSSCoverageResult> {
     this._cssCoverageActive = false;
     const coverage = this._page.coverage as CRCoverage;
-    return await coverage.stopCSSCoverage();
+    return await progress.race(coverage.stopCSSCoverage());
   }
 
   _onFrameAttached(frame: Frame) {
@@ -440,14 +467,14 @@ export class PageDispatcher extends Dispatcher<Page, channels.PageChannel, Brows
     for (const uid of this._locatorHandlers)
       this._page.unregisterLocatorHandler(uid);
     this._locatorHandlers.clear();
-    this._page.setFileChooserInterceptedBy(false, this).catch(() => {});
+    this._page.setFileChooserInterceptedBy(nullProgress, false, this).catch(() => {});
     if (this._jsCoverageActive)
       (this._page.coverage as CRCoverage).stopJSCoverage().catch(() => {});
     this._jsCoverageActive = false;
     if (this._cssCoverageActive)
       (this._page.coverage as CRCoverage).stopCSSCoverage().catch(() => {});
     this._cssCoverageActive = false;
-    this._stopScreencast().catch(() => {});
+    this.screencastStop({}, undefined).catch(() => {});
   }
 
   async setDockTile(params: channels.PageSetDockTileParams): Promise<void> {
@@ -477,11 +504,11 @@ export class WorkerDispatcher extends Dispatcher<Worker, channels.WorkerChannel,
   }
 
   async evaluateExpression(params: channels.WorkerEvaluateExpressionParams, progress: Progress): Promise<channels.WorkerEvaluateExpressionResult> {
-    return { value: serializeResult(await progress.race(this._object.evaluateExpression(params.expression, params.isFunction, parseArgument(params.arg)))) };
+    return { value: serializeResult(await this._object.evaluateExpression(progress, params.expression, params.isFunction, parseArgument(params.arg))) };
   }
 
   async evaluateExpressionHandle(params: channels.WorkerEvaluateExpressionHandleParams, progress: Progress): Promise<channels.WorkerEvaluateExpressionHandleResult> {
-    return { handle: JSHandleDispatcher.fromJSHandle(this, await progress.race(this._object.evaluateExpressionHandle(params.expression, params.isFunction, parseArgument(params.arg)))) };
+    return { handle: JSHandleDispatcher.fromJSHandle(this, await this._object.evaluateExpressionHandle(progress, params.expression, params.isFunction, parseArgument(params.arg))) };
   }
 
   async updateSubscription(params: channels.WorkerUpdateSubscriptionParams, progress: Progress): Promise<void> {

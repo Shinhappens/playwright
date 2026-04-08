@@ -133,6 +133,7 @@ export interface BrowserContext {
      */
     behavior?: 'wait'|'ignoreErrors'|'default'
   }): Promise<void>;
+
 }
 
 export interface Browser {
@@ -239,6 +240,23 @@ export interface CDPSession {
 export interface WebSocketRoute {
   onMessage(handler: (message: string | Buffer) => any): void;
   onClose(handler: (code: number | undefined, reason: string | undefined) => any): void;
+}
+
+export interface Screencast {
+  start(options?: {
+    onFrame?: (frame: { data: Buffer }) => Promise<any>|any;
+    path?: string;
+    size?: {
+      width: number;
+      height: number;
+    };
+    quality?: number;
+    annotate?: {
+      duration?: number;
+      position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right';
+      fontSize?: number;
+    };
+  }): Promise<Disposable>;
 }
 
 type DeviceDescriptor = {

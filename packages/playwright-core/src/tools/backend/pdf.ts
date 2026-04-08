@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { z } from '../../mcpBundle';
-import { formatObject } from '../../utils/isomorphic/stringUtils';
+import * as z from 'zod';
+import { formatObject } from '@isomorphic/stringUtils';
 
 import { defineTabTool } from './tool';
 

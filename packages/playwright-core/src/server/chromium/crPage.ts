@@ -15,9 +15,9 @@
  * limitations under the License.
  */
 
-import { assert } from '../../utils/isomorphic/assert';
-import { eventsHelper } from '../utils/eventsHelper';
-import { rewriteErrorMessage } from '../../utils/isomorphic/stackTrace';
+import { assert } from '@isomorphic/assert';
+import { rewriteErrorMessage } from '@isomorphic/stackTrace';
+import { eventsHelper } from '@utils/eventsHelper';
 import * as dialog from '../dialog';
 import * as dom from '../dom';
 import * as frames from '../frames';
@@ -35,10 +35,12 @@ import { exceptionToError, releaseObject, toConsoleMessageLocation } from './crP
 import { platformToFontFamilies } from './defaultFontFamilies';
 import { TargetClosedError } from '../errors';
 import { isSessionClosedError } from '../protocolError';
+import { startAutomaticVideoRecording } from '../videoRecorder';
+import { nullProgress } from '../progress';
 
 import type { CRSession } from './crConnection';
 import type { Protocol } from './protocol';
-import type { RegisteredListener } from '../utils/eventsHelper';
+import type { RegisteredListener } from '@utils/eventsHelper';
 import type { InitScript, PageDelegate } from '../page';
 import type { Progress } from '../progress';
 import type * as types from '../types';
@@ -286,17 +288,17 @@ export class CRPage implements PageDelegate {
     return this._sessionForHandle(handle)._scrollRectIntoViewIfNeeded(handle, rect);
   }
 
-  async startScreencast(options: { width: number; height: number; quality: number; }): Promise<void> {
-    await this._mainFrameSession._client.send('Page.startScreencast', {
+  startScreencast(options: { width: number; height: number; quality: number; }) {
+    this._mainFrameSession._client.send('Page.startScreencast', {
       format: 'jpeg',
       quality: options.quality,
       maxWidth: options.width,
       maxHeight: options.height,
-    });
+    }).catch(() => {});
   }
 
-  async stopScreencast() {
-    await this._mainFrameSession._client._sendMayFail('Page.stopScreencast');
+  stopScreencast() {
+    this._mainFrameSession._client._sendMayFail('Page.stopScreencast').catch(() => {});
   }
 
   rafCountForStablePosition(): number {
@@ -307,15 +309,15 @@ export class CRPage implements PageDelegate {
     return this._sessionForHandle(handle)._getContentQuads(handle);
   }
 
-  async setInputFilePaths(handle: dom.ElementHandle<HTMLInputElement>, files: string[]): Promise<void> {
-    const frame = await handle.ownerFrame();
+  async setInputFilePaths(progress: Progress, handle: dom.ElementHandle<HTMLInputElement>, files: string[]): Promise<void> {
+    const frame = await handle.ownerFrame(progress);
     if (!frame)
       throw new Error('Cannot set input files to detached input element');
     const parentSession = this._sessionForFrame(frame);
-    await parentSession._client.send('DOM.setFileInputFiles', {
+    await progress.race(parentSession._client.send('DOM.setFileInputFiles', {
       objectId: handle._objectId,
       files
-    });
+    }));
   }
 
   async adoptElementHandle<T extends Node>(handle: dom.ElementHandle<T>, to: dom.FrameExecutionContext): Promise<dom.ElementHandle<T>> {
@@ -352,7 +354,7 @@ export class CRPage implements PageDelegate {
     parent = frame.parentFrame();
     if (!parent)
       throw new Error('Frame has been detached.');
-    return parentSession._adoptBackendNodeId(backendNodeId, await parent._mainContext());
+    return parentSession._adoptBackendNodeId(backendNodeId, await parent.mainContext());
   }
 
   shouldToggleStyleSheetToSyncAnimations(): boolean {
@@ -439,13 +441,17 @@ class FrameSession {
     if (!this._page.isStorageStatePage && hasUIWindow &&
       !this._crPage._browserContext._browser.isClank() &&
       !this._crPage._browserContext._options.noDefaultViewport) {
-      const { windowId } = await this._client.send('Browser.getWindowForTarget');
-      this._windowId = windowId;
+      try {
+        const { windowId } = await this._client.send('Browser.getWindowForTarget');
+        this._windowId = windowId;
+      } catch {
+        // Some pages in Edge, like internal UIs, are mis-classified as "page", but do
+        // not actually have a browser window. That's fine, we won't resize them.
+      }
     }
 
-    let videoOptions: types.VideoOptions | undefined;
     if (this._isMainFrame() && hasUIWindow && !this._page.isStorageStatePage)
-      videoOptions = this._crPage._page.screencast.launchAutomaticVideoRecorder();
+      startAutomaticVideoRecording(this._crPage._page);
 
     let lifecycleEventsEnabled: Promise<any>;
     if (!this._isMainFrame())
@@ -534,8 +540,6 @@ class FrameSession {
       promises.push(this._updateFileChooserInterception(true));
       for (const initScript of this._crPage._page.allInitScripts())
         promises.push(this._evaluateOnNewDocument(initScript, 'main', true /* runImmediately */));
-      if (videoOptions)
-        promises.push(this._crPage._page.screencast.startVideoRecording(videoOptions));
     }
     promises.push(this._client.send('Runtime.runIfWaitingForDebugger'));
     promises.push(this._firstNonInitialNavigationCommittedPromise);
@@ -669,7 +673,7 @@ class FrameSession {
       worldName = 'utility';
     const context = new dom.FrameExecutionContext(delegate, frame, worldName);
     if (worldName)
-      frame._contextCreated(worldName, context);
+      frame.contextCreated(worldName, context);
     this._contextIdToContext.set(contextPayload.id, context);
   }
 
@@ -678,7 +682,7 @@ class FrameSession {
     if (!context)
       return;
     this._contextIdToContext.delete(executionContextId);
-    context.frame._contextDestroyed(context);
+    context.frame.contextDestroyed(context);
   }
 
   _onExecutionContextsCleared() {
@@ -864,7 +868,7 @@ class FrameSession {
       return;
     let handle;
     try {
-      const utilityContext = await frame._utilityContext();
+      const utilityContext = await frame.utilityContext();
       handle = await this._adoptBackendNodeId(event.backendNodeId, utilityContext);
     } catch (e) {
       // During async processing, frame/context may go away. We should not throw.
@@ -882,15 +886,14 @@ class FrameSession {
   }
 
   _onScreencastFrame(payload: Protocol.Page.screencastFramePayload) {
-    this._page.screencast.throttleFrameAck(() => {
-      this._client._sendMayFail('Page.screencastFrameAck', { sessionId: payload.sessionId });
-    });
     const buffer = Buffer.from(payload.data, 'base64');
     this._page.screencast.onScreencastFrame({
       buffer,
       frameSwapWallTime: payload.metadata.timestamp ? payload.metadata.timestamp * 1000 : Date.now(),
       viewportWidth: payload.metadata.deviceWidth,
       viewportHeight: payload.metadata.deviceHeight,
+    }, () => {
+      this._client._sendMayFail('Page.screencastFrameAck', { sessionId: payload.sessionId });
     });
   }
 
@@ -1081,8 +1084,8 @@ class FrameSession {
       return null;
     if (frame === this._page.mainFrame())
       return { x: 0, y: 0 };
-    const element = await frame.frameElement();
-    const box = await element.boundingBox();
+    const element = await frame.frameElement(nullProgress);
+    const box = await element.boundingBox(nullProgress);
     return box;
   }
 

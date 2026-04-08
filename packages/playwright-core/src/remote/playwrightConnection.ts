@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 
+import { startProfiling, stopProfiling } from '@utils/profiler';
+import { debugLogger } from '@utils/debugLogger';
+import { monotonicTime } from '@isomorphic/time';
+import { Semaphore } from '@isomorphic/semaphore';
 import { DispatcherConnection, PlaywrightDispatcher, RootDispatcher } from '../server';
 import { AndroidDevice } from '../server/android/android';
 import { Browser } from '../server/browser';
 import { DebugControllerDispatcher } from '../server/dispatchers/debugControllerDispatcher';
-import { startProfiling, stopProfiling } from '../server/utils/profiler';
-import { monotonicTime, Semaphore } from '../utils';
-import { debugLogger } from '../server/utils/debugLogger';
 import { PlaywrightDispatcherOptions } from '../server/dispatchers/playwrightDispatcher';
 
 import type { DispatcherScope, Playwright } from '../server';
@@ -110,6 +111,8 @@ export class PlaywrightConnection {
   }
 
   private async _onDisconnect(error?: Error) {
+    if (this._disconnected)
+      return;
     this._disconnected = true;
     debugLogger.log('server', `[${this._id}] disconnected. error: ${error}`);
     await this._root.stopPendingOperations(new Error('Disconnected')).catch(() => {});

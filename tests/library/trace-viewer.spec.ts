@@ -19,7 +19,7 @@
 
 import type { TraceViewerFixtures } from '../config/traceViewerFixtures';
 import { traceViewerFixtures } from '../config/traceViewerFixtures';
-import extractZip from '../../packages/playwright-core/bundles/zip/src/third_party/extract-zip';
+import extractZip from '../../packages/playwright-core/bundles/utils/src/third_party/extract-zip';
 import fs from 'fs';
 import path from 'path';
 import type http from 'http';
@@ -30,6 +30,7 @@ import { parseTrace, rafraf, roundBox } from '../config/utils';
 
 const test = playwrightTest.extend<TraceViewerFixtures>(traceViewerFixtures);
 
+// NOTE: set PWTEST_DEBUG_TRACE_VIEWER=1 to record/attach traces for these tests.
 test.skip(({ trace }) => trace === 'on');
 test.skip(({ mode }) => mode.startsWith('service'));
 test.skip(process.env.PW_CLOCK === 'frozen');
@@ -556,8 +557,26 @@ test('should have network request overrides', async ({ page, server, runAndTrace
   await traceViewer.selectAction('Navigate');
   await traceViewer.showNetworkTab();
   await expect(traceViewer.networkRequests).toContainText([/frame.htmlGET200text\/html/]);
-  await expect(traceViewer.networkRequests).toContainText([/style.cssGETx-unknown.*aborted/]);
+  await expect(traceViewer.networkRequests).toContainText([/style.cssGETcanceledx-unknown.*aborted/]);
   await expect(traceViewer.networkRequests).not.toContainText([/continued/]);
+});
+
+test('should show canceled status for requests canceled by navigation', async ({ page, server, runAndTrace }) => {
+  server.setRoute('/slow', (_req, _res) => {
+    // Never respond so the request stays in-flight until navigation cancels it.
+  });
+  const traceViewer = await runAndTrace(async () => {
+    await page.goto(server.PREFIX + '/empty.html');
+    const requestPromise = page.waitForRequest(server.PREFIX + '/slow');
+    page.evaluate(url => fetch(url).catch(() => {}), server.PREFIX + '/slow').catch(() => {});
+    await requestPromise;
+    // Navigate away to cancel the in-flight request.
+    await page.goto(server.PREFIX + '/empty.html?navigated=1');
+  });
+  await traceViewer.showNetworkTab();
+  const slowRequest = traceViewer.networkRequests.filter({ hasText: 'slow' });
+  await expect(slowRequest).toContainText([/GETcanceled/]);
+  await expect(slowRequest).toHaveCSS('background-color', 'rgb(242, 222, 222)');
 });
 
 test('should have network request overrides 2', async ({ page, server, runAndTrace }) => {
@@ -1221,7 +1240,7 @@ test('should display waitForLoadState even if did not wait for it', async ({ run
 });
 
 test('should display language-specific locators', async ({ runAndTrace, server, page, toImpl }) => {
-  toImpl(page).attribution.playwright.options.sdkLanguage = 'python';
+  toImpl(page).attribution.browser.options.sdkLanguage = 'python';
   const traceViewer = await runAndTrace(async () => {
     await page.setContent('<button>Submit</button>');
     await page.getByRole('button', { name: 'Submit' }).click();
@@ -1230,7 +1249,7 @@ test('should display language-specific locators', async ({ runAndTrace, server, 
     /Set content/,
     /Click.*get_by_role\("button", name="Submit"\)/,
   ]);
-  toImpl(page).attribution.playwright.options.sdkLanguage = 'javascript';
+  toImpl(page).attribution.browser.options.sdkLanguage = 'javascript';
 });
 
 test('should pick locator', async ({ page, runAndTrace, server }) => {
@@ -1419,10 +1438,10 @@ test('should pick locator in iframe', async ({ page, runAndTrace, server }) => {
     await frameTwo.setContent(`<div>HelloNameTwo</div>`);
     await page.evaluate('2+2');
   });
+  const snapshot = await traceViewer.snapshotFrame('Evaluate');
+
   await traceViewer.page.getByTitle('Pick locator').click();
   const cmWrapper = traceViewer.page.locator('.cm-wrapper').first();
-
-  const snapshot = await traceViewer.snapshotFrame('Evaluate');
 
   await snapshot.frameLocator('#frame1').getByText('Hello1').click();
   await expect.soft(cmWrapper).toContainText(`locator('#frame1').contentFrame().getByText('Hello1')`);
@@ -1802,9 +1821,9 @@ test('should show only one pointer with multilevel iframes', async ({ page, runA
     await page.frameLocator('iframe').frameLocator('iframe').locator('button').click({ position: { x: 5, y: 5 } });
   });
   const snapshotFrame = await traceViewer.snapshotFrame('Click');
-  await expect.soft(snapshotFrame.locator('x-pw-pointer')).not.toBeAttached();
+  await expect.soft(snapshotFrame.locator('x-pw-pointer')).toBeAttached();
   await expect.soft(snapshotFrame.frameLocator('iframe').locator('x-pw-pointer')).not.toBeAttached();
-  await expect.soft(snapshotFrame.frameLocator('iframe').frameLocator('iframe').locator('x-pw-pointer')).toBeVisible();
+  await expect.soft(snapshotFrame.frameLocator('iframe').frameLocator('iframe').locator('x-pw-pointer')).not.toBeAttached();
 });
 
 test('should show a popover', async ({ runAndTrace, page, server, platform, browserName, macVersion }) => {
@@ -2021,7 +2040,7 @@ test('should render locator descriptions', async ({ runAndTrace, page }) => {
     await page.locator('input').describe('custom').first().click();
   });
 
-  await expect(traceViewer.page.locator('body')).toMatchAriaSnapshot(`
+  await expect(traceViewer.page).toMatchAriaSnapshot(`
     - treeitem /Click.*custom/
     - treeitem /Click.*input.*first/
   `);
@@ -2067,7 +2086,7 @@ test('should filter actions', async ({ runAndTrace, page }) => {
   await expect(traceViewer.page.getByText('3 hidden', { exact: true })).toBeVisible();
 
   await traceViewer.page.getByRole('button', { name: 'Filter actions' }).click();
-  await expect(traceViewer.page.getByTestId('actions-filter-dialog')).toMatchAriaSnapshot(`
+  await expect(traceViewer.page).toMatchAriaSnapshot(`
     - dialog:
       - checkbox "Getters 1"
       - checkbox "Network routes 2"

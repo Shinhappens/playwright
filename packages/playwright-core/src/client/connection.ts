@@ -1,7 +1,7 @@
 /**
  * Copyright (c) Microsoft Corporation.
  *
- * Licensed under the Apache License, Version 2.0 (the 'License");
+ * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { rewriteErrorMessage } from '@isomorphic/stackTrace';
 import { EventEmitter } from './eventEmitter';
 import { Android, AndroidDevice, AndroidSocket } from './android';
 import { Artifact } from './artifact';
@@ -23,6 +24,7 @@ import { BrowserType } from './browserType';
 import { CDPSession } from './cdpSession';
 import { ChannelOwner } from './channelOwner';
 import { createInstrumentation } from './clientInstrumentation';
+import { Debugger } from './debugger';
 import { Dialog } from './dialog';
 import { DisposableObject } from './disposable';
 import { Electron, ElectronApplication } from './electron';
@@ -41,7 +43,6 @@ import { Tracing } from './tracing';
 import { Worker } from './worker';
 import { WritableStream } from './writableStream';
 import { ValidationError, findValidator  } from '../protocol/validator';
-import { rewriteErrorMessage } from '../utils/isomorphic/stackTrace';
 import type { ClientInstrumentation } from './clientInstrumentation';
 import type { HeadersArray } from './types';
 import type { ValidatorContext } from '../protocol/validator';
@@ -265,6 +266,9 @@ export class Connection extends EventEmitter {
         break;
       case 'CDPSession':
         result = new CDPSession(parent, type, guid, initializer);
+        break;
+      case 'Debugger':
+        result = new Debugger(parent, type, guid, initializer);
         break;
       case 'Dialog':
         result = new Dialog(parent, type, guid, initializer);

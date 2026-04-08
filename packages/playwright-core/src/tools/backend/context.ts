@@ -17,17 +17,17 @@
 import fs from 'fs';
 import path from 'path';
 
-import { debug } from '../../utilsBundle';
-import { escapeWithQuotes } from '../../utils/isomorphic/stringUtils';
-import { selectors } from '../../..';
+import debug from 'debug';
+import { escapeWithQuotes } from '@isomorphic/stringUtils';
+import { disposeAll } from '@utils/disposable';
+import { eventsHelper } from '@utils/eventsHelper';
+import { playwright } from '../../inprocess';
 
 import { Tab } from './tab';
-import { disposeAll } from '../../server/utils/disposable';
-import { eventsHelper } from '../../server/utils/eventsHelper';
 
-import type * as playwright from '../../..';
+import type * as playwrightTypes from '../../..';
 import type { SessionLog } from './sessionLog';
-import type { Disposable } from '../../server/utils/disposable';
+import type { Disposable } from '@utils/disposable';
 import type { ToolCapability } from './tool';
 
 const testDebug = debug('pw:mcp:test');
@@ -48,7 +48,7 @@ export type ContextConfig = {
   saveTrace?: boolean;
   secrets?: Record<string, string>;
   snapshot?: {
-    mode?: 'incremental' | 'full' | 'none';
+    mode?: 'full' | 'none';
   };
   testIdAttribute?: string;
   timeouts?: {
@@ -76,7 +76,7 @@ export type RouteEntry = {
   contentType?: string;
   addHeaders?: Record<string, string>;
   removeHeaders?: string[];
-  handler: (route: playwright.Route) => Promise<void>;
+  handler: (route: playwrightTypes.Route) => Promise<void>;
 };
 
 export type FilenameTemplate = {
@@ -86,26 +86,27 @@ export type FilenameTemplate = {
   date?: Date;
 };
 
-type VideoParams = NonNullable<Parameters<playwright.Video['start']>[0]>;
+type VideoParams = { size?: { width: number; height: number } };
 
 export class Context {
   readonly config: ContextConfig;
   readonly sessionLog: SessionLog | undefined;
   readonly options: ContextOptions;
-  private _rawBrowserContext: playwright.BrowserContext;
-  private _browserContextPromise: Promise<playwright.BrowserContext> | undefined;
+  private _rawBrowserContext: playwrightTypes.BrowserContext;
+  private _browserContextPromise: Promise<playwrightTypes.BrowserContext> | undefined;
   private _tabs: Tab[] = [];
   private _currentTab: Tab | undefined;
   private _routes: RouteEntry[] = [];
   private _video: {
-    allVideos: Set<playwright.Video>;
     params: VideoParams;
+    fileNames: string[];
+    fileName: string;
   } | undefined;
   private _disposables: Disposable[] = [];
 
   private _runningToolName: string | undefined;
 
-  constructor(browserContext: playwright.BrowserContext, options: ContextOptions) {
+  constructor(browserContext: playwrightTypes.BrowserContext, options: ContextOptions) {
     this.config = options.config;
     this.sessionLog = options.sessionLog;
     this.options = options;
@@ -120,6 +121,10 @@ export class Context {
     this._tabs.length = 0;
     this._currentTab = undefined;
     await this.stopVideoRecording();
+  }
+
+  debugger() {
+    return this._rawBrowserContext.debugger;
   }
 
   tabs(): Tab[] {
@@ -177,33 +182,39 @@ export class Context {
     return await outputFile(this.options, baseName, options);
   }
 
-  async startVideoRecording(params: VideoParams) {
+  async startVideoRecording(fileName: string, params: VideoParams) {
     if (this._video)
       throw new Error('Video recording has already been started.');
-    this._video = { allVideos: new Set(), params };
+    this._video = { params, fileName, fileNames: [] };
     const browserContext = await this.ensureBrowserContext();
     for (const page of browserContext.pages())
       await this._startPageVideo(page);
   }
 
-  async stopVideoRecording(): Promise<playwright.Video[]> {
+  async stopVideoRecording(): Promise<string[]> {
     if (!this._video)
       return [];
     const video = this._video;
     for (const page of this._rawBrowserContext.pages())
-      await page.video().stop();
+      await page.screencast.stop();
     this._video = undefined;
-    return [...video.allVideos];
+    return [...video.fileNames];
   }
 
-  private async _startPageVideo(page: playwright.Page) {
+  private async _startPageVideo(page: playwrightTypes.Page) {
     if (!this._video)
       return;
-    this._video.allVideos.add(page.video());
-    await page.video().start(this._video.params);
+    const suffix = this._video.fileNames.length ? `-${this._video.fileNames.length}` : '';
+    let fileName = this._video.fileName;
+    if (fileName && suffix) {
+      const ext = path.extname(fileName);
+      fileName = path.basename(fileName, ext) + suffix + ext;
+    }
+    this._video.fileNames.push(fileName);
+    await page.screencast.start({ path: fileName, ...this._video.params });
   }
 
-  private _onPageCreated(page: playwright.Page) {
+  private _onPageCreated(page: playwrightTypes.Page) {
     const tab = new Tab(this, page, tab => this._onPageClosed(tab));
     this._tabs.push(tab);
     if (!this._currentTab)
@@ -257,7 +268,7 @@ export class Context {
     this._runningToolName = name;
   }
 
-  private async _setupRequestInterception(context: playwright.BrowserContext) {
+  private async _setupRequestInterception(context: playwrightTypes.BrowserContext) {
     if (this.config.network?.allowedOrigins?.length) {
       this._disposables.push(await context.route('**', route => route.abort('blockedbyclient')));
 
@@ -273,7 +284,7 @@ export class Context {
     }
   }
 
-  async ensureBrowserContext(): Promise<playwright.BrowserContext> {
+  async ensureBrowserContext(): Promise<playwrightTypes.BrowserContext> {
     if (this._browserContextPromise)
       return this._browserContextPromise;
     this._browserContextPromise = this._initializeBrowserContext();
@@ -282,7 +293,7 @@ export class Context {
 
   private async _initializeBrowserContext() {
     if (this.config.testIdAttribute)
-      selectors.setTestIdAttribute(this.config.testIdAttribute);
+      playwright.selectors.setTestIdAttribute(this.config.testIdAttribute);
     const browserContext = this._rawBrowserContext;
     await this._setupRequestInterception(browserContext);
 
@@ -374,6 +385,7 @@ async function checkFile(options: ContextOptions, resolvedFilename: string, flag
   // Trust llm to use valid characters in file names.
   const output = outputDir(options);
   const workspace = options.cwd;
-  if (!resolvedFilename.startsWith(output) && !resolvedFilename.startsWith(workspace))
+  const withinDir = (root: string) => resolvedFilename === root || resolvedFilename.startsWith(root + path.sep);
+  if (!withinDir(output) && !withinDir(workspace))
     throw new Error(`File access denied: ${resolvedFilename} is outside allowed roots. Allowed roots: ${output}, ${workspace}`);
 }

@@ -17,8 +17,13 @@
 import fs from 'fs';
 import path from 'path';
 
-import { ManualPromise, SerializedFS, calculateSha1, createGuid, getPlaywrightVersion, monotonicTime } from 'playwright-core/lib/utils';
-import { yauzl, yazl } from 'playwright-core/lib/zipBundle';
+import * as yazl from 'yazl';
+import * as yauzl from 'yauzl';
+import { ManualPromise } from '@isomorphic/manualPromise';
+import { monotonicTime } from '@isomorphic/time';
+import { calculateSha1, createGuid } from '@utils/crypto';
+import { SerializedFS } from '@utils/fileUtils';
+import { getPlaywrightVersion } from '@utils/userAgent';
 
 import { filteredStackTrace } from '../util';
 

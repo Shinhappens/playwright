@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-import { formatMatcherMessage, printReceivedStringContainExpectedResult, urlMatches } from 'playwright-core/lib/utils';
+import { urlMatches } from '@isomorphic/urlMatch';
+import { formatMatcherMessage, printReceivedStringContainExpectedResult } from '@utils/expectUtils';
 
 import type { MatcherResult } from './matcherHint';
 import type { Page } from 'playwright-core';

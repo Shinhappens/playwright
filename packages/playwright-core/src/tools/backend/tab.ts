@@ -14,22 +14,20 @@
  * limitations under the License.
  */
 
-import url from 'url';
-
 import { EventEmitter } from 'events';
-import { asLocator } from '../../utils/isomorphic/locatorGenerators';
-import { ManualPromise } from '../../utils/isomorphic/manualPromise';
-import { debug } from '../../utilsBundle';
-
-import { eventsHelper } from '../../server/utils/eventsHelper';
-import { disposeAll } from '../../server/utils/disposable';
+import debug from 'debug';
+import { asLocator } from '@isomorphic/locatorGenerators';
+import { locatorOrSelectorAsSelector } from '@isomorphic/locatorParser';
+import { ManualPromise } from '@isomorphic/manualPromise';
+import { eventsHelper } from '@utils/eventsHelper';
+import { disposeAll } from '@utils/disposable';
 import { waitForCompletion, eventWaiter } from './utils';
 import { LogFile } from './logFile';
 import { ModalState } from './tool';
 import { handleDialog } from './dialogs';
 import { uploadFile } from './files';
 
-import type { Disposable } from '../../server/utils/disposable';
+import type { Disposable } from '@utils/disposable';
 import type { Context, ContextConfig } from './context';
 import type * as playwright from '../../..';
 
@@ -83,7 +81,6 @@ export type TabHeader = {
 
 type TabSnapshot = {
   ariaSnapshot: string;
-  ariaSnapshotDiff?: string;
   modalStates: ModalState[];
   events: EventEntry[];
   consoleLink?: string;
@@ -98,7 +95,6 @@ export class Tab extends EventEmitter<TabEventsInterface> {
   private _onPageClose: (tab: Tab) => void;
   private _modalStates: ModalState[] = [];
   private _initializedPromise: Promise<void>;
-  private _needsFullSnapshot = false;
   private _recentEventEntries: EventEntry[] = [];
   private _consoleLog: LogFile;
   private _disposables: Disposable[];
@@ -132,6 +128,7 @@ export class Tab extends EventEmitter<TabEventsInterface> {
         void this._downloadStarted(download);
       }),
     ];
+    // eslint-disable-next-line no-restricted-syntax
     (page as any)[tabSymbol] = this;
     const wallTime = Date.now();
     this._consoleLog = new LogFile(this.context, wallTime, 'console', 'Console');
@@ -147,6 +144,7 @@ export class Tab extends EventEmitter<TabEventsInterface> {
   }
 
   static forPage(page: playwright.Page): Tab | undefined {
+    // eslint-disable-next-line no-restricted-syntax
     return (page as any)[tabSymbol];
   }
 
@@ -169,7 +167,7 @@ export class Tab extends EventEmitter<TabEventsInterface> {
       this._requests.push(request);
     for (const initPage of this.context.config.browser?.initPage || []) {
       try {
-        const { default: func } = await import(url.pathToFileURL(initPage).href);
+        const { default: func } = require(initPage);
         await func({ page: this.page });
       } catch (e) {
         debug('pw:tools:error')(e);
@@ -251,9 +249,8 @@ export class Tab extends EventEmitter<TabEventsInterface> {
   private _handleConsoleMessage(message: ConsoleMessage) {
     const wallTime = message.timestamp;
     this._addLogEntry({ type: 'console', wallTime, message });
-    const level = consoleLevelForMessageType(message.type);
-    if (level === 'error' || level === 'warning')
-      this._consoleLog.appendLine(wallTime, () => message.toString());
+    if (shouldIncludeMessage(this.context.config.console?.level, message.type))
+      this._consoleLog.appendLine(wallTime, message.toString());
   }
 
   private _addLogEntry(entry: EventEntry) {
@@ -293,6 +290,20 @@ export class Tab extends EventEmitter<TabEventsInterface> {
     await this.page.waitForLoadState(state, options).catch(e => debug('pw:tools:error')(e));
   }
 
+  async checkUrlAndNavigate(url: string): Promise<string> {
+    try {
+      new URL(url);
+    } catch (e) {
+      if (url.startsWith('localhost'))
+        url = 'http://' + url;
+      else
+        url = 'https://' + url;
+    }
+    this.context.checkUrlAllowed(url);
+    await this.navigate(url);
+    return url;
+  }
+
   async navigate(url: string) {
     await this._initializedPromise;
 
@@ -324,8 +335,8 @@ export class Tab extends EventEmitter<TabEventsInterface> {
 
   async consoleMessageCount(): Promise<{ total: number, errors: number, warnings: number }> {
     await this._initializedPromise;
-    const messages = await this.page.consoleMessages({ filter: 'sinceNavigation' });
-    const pageErrors = await this.page.pageErrors({ filter: 'sinceNavigation' });
+    const messages = await this.page.consoleMessages({ filter: 'since-navigation' });
+    const pageErrors = await this.page.pageErrors({ filter: 'since-navigation' });
     let errors = pageErrors.length;
     let warnings = 0;
     for (const message of messages) {
@@ -340,14 +351,14 @@ export class Tab extends EventEmitter<TabEventsInterface> {
   async consoleMessages(level: ConsoleMessageLevel, all?: boolean): Promise<ConsoleMessage[]> {
     await this._initializedPromise;
     const result: ConsoleMessage[] = [];
-    const messages = await this.page.consoleMessages({ filter: all ? 'all' : 'sinceNavigation' });
+    const messages = await this.page.consoleMessages({ filter: all ? 'all' : 'since-navigation' });
     for (const message of messages) {
       const cm = messageToConsoleMessage(message);
       if (shouldIncludeMessage(level, cm.type))
         result.push(cm);
     }
     if (shouldIncludeMessage(level, 'error')) {
-      const errors = await this.page.pageErrors({ filter: all ? 'all' : 'sinceNavigation' });
+      const errors = await this.page.pageErrors({ filter: all ? 'all' : 'since-navigation' });
       for (const error of errors)
         result.push(pageErrorToConsoleMessage(error));
     }
@@ -372,14 +383,15 @@ export class Tab extends EventEmitter<TabEventsInterface> {
     this._requests.length = 0;
   }
 
-  async captureSnapshot(selector: string | undefined, relativeTo: string | undefined): Promise<TabSnapshot> {
+  async captureSnapshot(selector: string | undefined, depth: number | undefined, relativeTo: string | undefined): Promise<TabSnapshot> {
     await this._initializedPromise;
     let tabSnapshot: TabSnapshot | undefined;
     const modalStates = await this._raceAgainstModalStates(async () => {
-      const snapshot: { full: string, incremental?: string } = selector ? await this.page.locator(selector).snapshotForAI() : await this.page.snapshotForAI({ track: 'response' });
+      const ariaSnapshot = selector
+        ? await this.page.locator(selector).ariaSnapshot({ mode: 'ai', depth })
+        : await this.page.ariaSnapshot({ mode: 'ai', depth });
       tabSnapshot = {
-        ariaSnapshot: snapshot.full,
-        ariaSnapshotDiff: this._needsFullSnapshot ? undefined : snapshot.incremental,
+        ariaSnapshot,
         modalStates: [],
         events: [],
       };
@@ -390,12 +402,8 @@ export class Tab extends EventEmitter<TabEventsInterface> {
       this._recentEventEntries = [];
     }
 
-    // If we failed to capture a snapshot this time, make sure we do a full one next time,
-    // to avoid reporting deltas against un-reported snapshot.
-    this._needsFullSnapshot = !tabSnapshot;
     return tabSnapshot ?? {
       ariaSnapshot: '',
-      ariaSnapshotDiff: '',
       modalStates,
       events: [],
     };
@@ -436,17 +444,19 @@ export class Tab extends EventEmitter<TabEventsInterface> {
     await this._initializedPromise;
     return Promise.all(params.map(async param => {
       if (param.selector) {
-        const locator = this.page.locator(param.selector);
-        if (!await locator.isVisible())
-          throw new Error(`Selector ${param.selector} does not match any elements.`);
-        return { locator, resolved: asLocator('javascript', param.selector) };
+        const selector = locatorOrSelectorAsSelector('javascript', param.selector, this.context.config.testIdAttribute || 'data-testid');
+        const handle = await this.page.$(selector);
+        if (!handle)
+          throw new Error(`"${param.selector}" does not match any elements.`);
+        handle.dispose().catch(() => {});
+        return { locator: this.page.locator(selector), resolved: asLocator('javascript', selector) };
       } else {
         try {
           let locator = this.page.locator(`aria-ref=${param.ref}`);
           if (param.element)
             locator = locator.describe(param.element);
-          const resolved = await locator.toCode();
-          return { locator, resolved };
+          const resolved = await locator.normalize();
+          return { locator, resolved: resolved.toString() };
         } catch (e) {
           throw new Error(`Ref ${param.ref} not found in the current page snapshot. Try capturing new snapshot.`);
         }

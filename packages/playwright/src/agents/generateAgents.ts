@@ -17,8 +17,9 @@
 import fs from 'fs';
 import path from 'path';
 
-import { colors, yaml } from 'playwright-core/lib/utilsBundle';
-import { mkdirIfNeeded } from 'playwright-core/lib/utils';
+import colors from 'colors/safe';
+import yaml from 'yaml';
+import { mkdirIfNeeded } from '@utils/fileUtils';
 
 import { FullConfigInternal } from '../common/config';
 import { defaultSeedFile, findSeedFile, seedFileContent, seedProject } from '../mcp/test/seed';
@@ -202,7 +203,7 @@ export class CopilotGenerator {
       'name': agent.name,
       'description': agent.description + examples,
       'tools': agent.tools,
-      'model': 'Claude Sonnet 4',
+      'model': 'Claude Sonnet 4.6',
       'mcp-servers': CopilotGenerator.mcpServers,
     };
     lines.push(`---`);

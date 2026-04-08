@@ -16,7 +16,8 @@
 
 import * as fs from 'fs';
 
-import { monotonicTime, spawnAsync } from 'playwright-core/lib/utils';
+import { monotonicTime } from '@isomorphic/time';
+import { spawnAsync } from '@utils/spawnAsync';
 
 import type { TestRunnerPlugin } from './';
 import type { FullConfig } from '../../types/testReporter';

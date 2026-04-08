@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-import { z } from '../../mcpBundle';
-
+import * as z from 'zod';
 import { commands } from './commands';
 
 import type zodType from 'zod';
@@ -105,6 +104,7 @@ export function generateHelp() {
 
   lines.push('\nGlobal options:');
   lines.push(formatWithGap('  --help [command]', 'print help'));
+  lines.push(formatWithGap('  --raw', 'output only the result value, without status and code'));
   lines.push(formatWithGap('  --version', 'print version'));
 
   return lines.join('\n');
@@ -154,27 +154,33 @@ function unwrapZodType(schema: zodType.ZodTypeAny): zodType.ZodTypeAny {
   return schema;
 }
 
+function isBooleanSchema(schema: zodType.ZodTypeAny): boolean {
+  return unwrapZodType(schema) instanceof z.ZodBoolean;
+}
+
 export function generateHelpJSON() {
   const booleanOptions = new Set<string>();
-  for (const command of Object.values(commands)) {
-    if (!command.options)
-      continue;
-    const optionsShape = (command.options as zodType.ZodObject<any>).shape;
-    for (const [name, schema] of Object.entries(optionsShape)) {
-      const innerSchema = unwrapZodType(schema as zodType.ZodTypeAny);
-      if (innerSchema instanceof z.ZodBoolean)
-        booleanOptions.add(name);
+
+  const commandEntries: Record<string, { help: string, flags: Record<string, 'boolean' | 'string'> }> = {};
+  for (const [name, command] of Object.entries(commands)) {
+    const flags: Record<string, 'boolean' | 'string'> = {};
+    if (command.options) {
+      const optionsShape = (command.options as zodType.ZodObject<any>).shape;
+      for (const [flagName, schema] of Object.entries(optionsShape)) {
+        const isBoolean = isBooleanSchema(schema as zodType.ZodTypeAny);
+        flags[flagName] = isBoolean ? 'boolean' : 'string';
+        if (isBoolean)
+          booleanOptions.add(flagName);
+      }
     }
+    commandEntries[name] = { help: generateCommandHelp(command), flags };
   }
 
-  const help = {
+  return {
     global: generateHelp(),
-    commands: Object.fromEntries(
-        Object.entries(commands).map(([name, command]) => [name, generateCommandHelp(command)])
-    ),
+    commands: commandEntries,
     booleanOptions: [...booleanOptions],
   };
-  return help;
 }
 
 function formatWithGap(prefix: string, text: string, threshold: number = 30) {

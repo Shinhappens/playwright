@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 import fs from 'fs';
-import { calculateSha1 } from 'playwright-core/lib/utils';
+import { calculateSha1 } from '@utils/crypto';
 
 import { loadReporter } from './loadUtils';
 import { formatError } from '../reporters/base';

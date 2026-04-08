@@ -16,7 +16,7 @@
 
 import fs from 'fs';
 
-import { monotonicTime } from 'playwright-core/lib/utils';
+import { monotonicTime } from '@isomorphic/time';
 
 import { internalScreen, prepareErrorStack, relativeFilePath } from './base';
 import { Multiplexer } from './multiplexer';

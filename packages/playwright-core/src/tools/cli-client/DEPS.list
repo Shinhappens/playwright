@@ -1,11 +1,15 @@
 [program.ts]
 "strict"
+./minimist.ts
 ./session.ts
 ./registry.ts
+../../package.ts
 ../../serverRegistry.ts
 
 [session.ts]
 "strict"
+./minimist.ts
+../../package.ts
 ../utils/socketConnection.ts
 ./registry.ts
 
@@ -13,4 +17,8 @@
 "strict"
 
 [registry.ts]
+"strict"
+../../package.ts
+
+[minimist.ts]
 "strict"
