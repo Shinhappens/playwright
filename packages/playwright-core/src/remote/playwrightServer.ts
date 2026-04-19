@@ -18,10 +18,10 @@ import { Semaphore } from '@isomorphic/semaphore';
 import { DEFAULT_PLAYWRIGHT_LAUNCH_TIMEOUT } from '@isomorphic/time';
 import { WSServer } from '@utils/wsServer';
 import { wrapInASCIIBox } from '@utils/ascii';
-import { getPlaywrightVersion } from '@utils/userAgent';
 import { SocksProxy } from '@utils/socksProxy';
 import { debugLogger } from '@utils/debugLogger';
 import { isUnderTest } from '@utils/debug';
+import { getPlaywrightVersion } from '../server/userAgent';
 import { PlaywrightConnection, PlaywrightInitializeResult } from './playwrightConnection';
 import { WebSocketServerTransport } from './serverTransport';
 import { createPlaywright } from '../server/playwright';
@@ -319,6 +319,10 @@ export class PlaywrightServer {
 
   async close() {
     await this._wsServer.close();
+    // Close all browsers that were launched by this server (e.g. in reuse mode)
+    // to avoid leaking browser processes that may hold connections to test servers.
+    for (const browser of this._playwright.allBrowsers())
+      await browser.close(nullProgress, { reason: 'Server closed' });
   }
 }
 

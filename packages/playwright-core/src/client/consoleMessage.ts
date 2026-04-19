@@ -17,7 +17,7 @@
 import { JSHandle } from './jsHandle';
 
 import type * as api from '../../types/types';
-import type { Platform } from './platform';
+import type { Platform } from '@isomorphic/platform';
 import type * as channels from '@protocol/channels';
 import type { Page } from './page';
 import type { Worker } from './worker';
@@ -28,9 +28,9 @@ export class ConsoleMessage implements api.ConsoleMessage {
 
   private _page: Page | null;
   private _worker: Worker | null;
-  private _event: channels.BrowserContextConsoleEvent | channels.ElectronApplicationConsoleEvent;
+  private _event: channels.BrowserContextConsoleEvent | channels.WorkerConsoleEvent;
 
-  constructor(platform: Platform, event: channels.BrowserContextConsoleEvent | channels.ElectronApplicationConsoleEvent, page: Page | null, worker: Worker | null) {
+  constructor(platform: Platform, event: channels.BrowserContextConsoleEvent | channels.WorkerConsoleEvent, page: Page | null, worker: Worker | null) {
     this._page = page;
     this._worker = worker;
     this._event = event;

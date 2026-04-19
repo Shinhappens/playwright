@@ -11,10 +11,11 @@
          - .../lib/* means require dependency
       */
       "@dashboard/*": ["./packages/dashboard/src/*"],
+      "@trace-viewer/*": ["./packages/trace-viewer/src/*"],
       "@html-reporter/*": ["./packages/html-reporter/src/*"],
       "@injected/*": ["./packages/injected/src/*"],
-      "@isomorphic/*": ["./packages/playwright-core/src/utils/isomorphic/*"],
-      "@utils/*": ["./packages/playwright-core/src/server/utils/*"],
+      "@isomorphic/*": ["./packages/isomorphic/*"],
+      "@utils/*": ["./packages/utils/*"],
       "@protocol/*": ["./packages/protocol/src/*"],
       "@recorder/*": ["./packages/recorder/src/*"],
       "@testIsomorphic/*": ["./packages/playwright/src/isomorphic/*"],

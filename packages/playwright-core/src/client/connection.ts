@@ -27,7 +27,6 @@ import { createInstrumentation } from './clientInstrumentation';
 import { Debugger } from './debugger';
 import { Dialog } from './dialog';
 import { DisposableObject } from './disposable';
-import { Electron, ElectronApplication } from './electron';
 import { ElementHandle } from './elementHandle';
 import { TargetClosedError, parseError } from './errors';
 import { APIRequestContext } from './fetch';
@@ -46,7 +45,7 @@ import { ValidationError, findValidator  } from '../protocol/validator';
 import type { ClientInstrumentation } from './clientInstrumentation';
 import type { HeadersArray } from './types';
 import type { ValidatorContext } from '../protocol/validator';
-import type { Platform } from './platform';
+import type { Platform } from '@isomorphic/platform';
 import type * as channels from '@protocol/channels';
 
 class Root extends ChannelOwner<channels.RootChannel> {
@@ -275,12 +274,6 @@ export class Connection extends EventEmitter {
         break;
       case 'Disposable':
         result = new DisposableObject(parent, type, guid, initializer);
-        break;
-      case 'Electron':
-        result = new Electron(parent, type, guid, initializer);
-        break;
-      case 'ElectronApplication':
-        result = new ElectronApplication(parent, type, guid, initializer);
         break;
       case 'ElementHandle':
         result = new ElementHandle(parent, type, guid, initializer);

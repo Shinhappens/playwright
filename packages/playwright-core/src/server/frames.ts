@@ -1319,12 +1319,21 @@ export class Frame extends SdkObject<FrameEventMap> {
     }, undefined, options, scope);
   }
 
-  async highlight(progress: Progress, selector: string) {
+  async addHighlight(progress: Progress, selector: string, style?: string) {
+    const resolved = await progress.race(this.selectors.resolveInjectedForSelector(selector));
+    if (!resolved)
+      return;
+    return await progress.race(resolved.injected.evaluate((injected, { info, style }) => {
+      return injected.addHighlight(info.parsed, style);
+    }, { info: resolved.info, style }));
+  }
+
+  async removeHighlight(progress: Progress, selector: string) {
     const resolved = await progress.race(this.selectors.resolveInjectedForSelector(selector));
     if (!resolved)
       return;
     return await progress.race(resolved.injected.evaluate((injected, { info }) => {
-      return injected.highlight(info.parsed);
+      return injected.removeHighlight(info.parsed);
     }, { info: resolved.info }));
   }
 
@@ -1400,6 +1409,16 @@ export class Frame extends SdkObject<FrameEventMap> {
   async setInputFiles(progress: Progress, selector: string, params: Omit<channels.FrameSetInputFilesParams, 'timeout'> & { noAutoWaiting?: boolean }): Promise<channels.FrameSetInputFilesResult> {
     const inputFileItems = await progress.race(prepareFilesForUpload(this, params));
     return dom.assertDone(await this._retryWithProgressIfNotConnected(progress, selector, params, (progress, handle) => handle._setInputFiles(progress, inputFileItems)));
+  }
+
+  async drop(progress: Progress, selector: string, params: Omit<channels.FrameDropParams, 'timeout' | 'selector'>, options: types.PointerActionWaitOptions): Promise<void> {
+    const hasFiles = !!(params.payloads?.length || params.localPaths?.length || params.streams?.length);
+    const hasData = !!params.data?.length;
+    if (!hasFiles && !hasData)
+      throw new Error('At least one of "files" or "data" must be provided.');
+    const inputFileItems = hasFiles ? await progress.race(prepareFilesForUpload(this, params)) : { filePayloads: undefined, localPaths: undefined };
+    const data = params.data ?? [];
+    dom.assertDone(await this._retryWithProgressIfNotConnected(progress, selector, options, (progress, handle) => handle._drop(progress, inputFileItems, data, options)));
   }
 
   async type(progress: Progress, selector: string, text: string, options: { delay?: number, noAutoWaiting?: boolean } & types.StrictOptions) {
@@ -1744,6 +1763,15 @@ export class Frame extends SdkObject<FrameEventMap> {
     await injectedScriptHandle.evaluate((injectedScript, { source, arg }) => {
       injectedScript.extend(source, arg);
     }, { source, arg });
+  }
+
+  async ariaRef(progress: Progress, selector: string): Promise<{ ref?: string }> {
+    const ref = await this._retryWithProgressIfNotConnected(progress, selector, { strict: true, performActionPreChecks: true }, async (progress, handle) => {
+      return await progress.race(handle.evaluateInUtility(([injected, element]) => {
+        return (element as any)._ariaRef?.ref as string | undefined;
+      }, {}));
+    });
+    return { ref };
   }
 
   async ariaSnapshot(progress: Progress, options: { mode?: 'ai' | 'default', track?: string, doNotRenderActive?: boolean, selector?: string, depth?: number } = {}): Promise<{ snapshot: string }> {

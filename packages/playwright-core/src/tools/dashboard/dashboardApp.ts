@@ -25,146 +25,58 @@ import { gracefullyProcessExitDoNotHang } from '@utils/processLauncher';
 import { libPath } from '../../package';
 import { playwright } from '../../inprocess';
 import { findChromiumChannelBestEffort, registryDirectory } from '../../server/registry/index';
-import { CDPConnection, DashboardConnection } from './dashboardController';
-import { serverRegistry } from '../../serverRegistry';
-import { connectToBrowserAcrossVersions } from '../utils/connect';
-import { createClientInfo } from '../cli-client/registry';
+import { minimist } from '../cli-client/minimist';
+import { saveOutputFile } from '../trace/traceUtils';
+import { DashboardConnection } from './dashboardController';
 
 import type * as api from '../../..';
-import type { SessionStatus } from '../../../../dashboard/src/sessionModel';
+import type { AnnotationData } from '@dashboard/dashboardChannel';
 
-function readBody(request: http.IncomingMessage): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    request.on('data', (chunk: Buffer) => chunks.push(chunk));
-    request.on('end', () => {
-      try {
-        const text = Buffer.concat(chunks).toString();
-        resolve(text ? JSON.parse(text) : {});
-      } catch (e) {
-        reject(e);
-      }
-    });
-    request.on('error', reject);
-  });
-}
+type RevealOptions = { sessionName?: string; workspaceDir?: string };
 
-async function parseRequest(request: http.IncomingMessage): Promise<{ guid: string }> {
-  const body = await readBody(request);
-  if (!body.guid)
-    throw new Error('Dashboard app is too old, please close it and open again');
-  return { guid: body.guid };
-}
+type DashboardCommand = RevealOptions & { command: 'bringToFront' | 'annotate' };
 
-function sendJSON(response: http.ServerResponse, data: any, statusCode = 200) {
-  response.statusCode = statusCode;
-  response.setHeader('Content-Type', 'application/json');
-  response.end(JSON.stringify(data));
-}
+type DashboardServer = {
+  url: string;
+  reveal: (options: RevealOptions) => void;
+  triggerAnnotate: () => void;
+  registerAnnotateWaiter: (socket: net.Socket) => void;
+};
 
-async function loadBrowserDescriptorSessions(wsPath: string): Promise<SessionStatus[]> {
-  const entriesByWorkspace = await serverRegistry.list();
-  const sessions: SessionStatus[] = [];
-  for (const [, entries] of entriesByWorkspace) {
-    for (const entry of entries) {
-      let wsUrl: string | undefined;
-      if (entry.canConnect) {
-        const url = new URL(wsPath, 'http://localhost');
-        url.searchParams.set('guid', entry.browser.guid);
-        wsUrl = url.pathname + url.search;
-      }
-      sessions.push({ ...entry, wsUrl });
-    }
-  }
-  return sessions;
-}
-
-const browserGuidToDashboardConnection = new Map<string, DashboardConnection>();
-
-async function handleApiRequest(httpServer: HttpServer, request: http.IncomingMessage, response: http.ServerResponse) {
-  const url = new URL(request.url!,  httpServer.urlPrefix('human-readable'));
-  const apiPath = url.pathname;
-
-  if (apiPath === '/api/sessions/list' && request.method === 'GET') {
-    const sessions = await loadBrowserDescriptorSessions(httpServer.wsGuid()!);
-    const clientInfo = createClientInfo();
-    sendJSON(response, { sessions, clientInfo });
-    return;
-  }
-
-  if (apiPath === '/api/sessions/close' && request.method === 'POST') {
-    const { guid } = await parseRequest(request);
-    let browser: api.Browser;
-    try {
-      const browserDescriptor = serverRegistry.readDescriptor(guid);
-      browser = await connectToBrowserAcrossVersions(browserDescriptor);
-    } catch (e) {
-      sendJSON(response, { error: 'Failed to connect to browser socket: ' + e.message }, 500);
-      return;
-    }
-    try {
-      await Promise.all(browser.contexts().map(context => context.close()));
-      await browser.close();
-      sendJSON(response, { success: true });
-      return;
-    } catch (e) {
-      sendJSON(response, { error: 'Failed to close browser: ' + e.message }, 500);
-      return;
-    }
-  }
-
-  if (apiPath === '/api/sessions/delete-data' && request.method === 'POST') {
-    const { guid } = await parseRequest(request);
-    try {
-      await serverRegistry.deleteUserData(guid);
-    } catch (e) {
-      sendJSON(response, { error: 'Failed to delete session data: ' + e.message }, 500);
-      return;
-    }
-    sendJSON(response, { success: true });
-    return;
-  }
-
-  response.statusCode = 404;
-  response.end(JSON.stringify({ error: 'Not found' }));
-}
-
-async function innerOpenDashboardApp(): Promise<api.Page> {
+async function startDashboardServer(options: { port?: number; host?: string; reveal?: RevealOptions } = {}): Promise<DashboardServer> {
   const httpServer = new HttpServer();
   const dashboardDir = libPath('vite', 'dashboard');
 
-  httpServer.routePrefix('/api/', (request: http.IncomingMessage, response: http.ServerResponse) => {
-    handleApiRequest(httpServer, request, response).catch(e => {
-      response.statusCode = 500;
-      response.end(JSON.stringify({ error: e.message }));
-    });
-    return true;
-  });
+  const connections = new Set<DashboardConnection>();
+  let currentReveal: RevealOptions = options.reveal ?? {};
+  let pendingAnnotate = false;
+  const waitingSockets = new Set<net.Socket>();
 
-  httpServer.createWebSocket(url => {
-    const guid = url.searchParams.get('guid');
-    if (!guid)
-      throw new Error('Unsupported WebSocket URL: ' + url.toString());
-    const browserDescriptor = serverRegistry.readDescriptor(guid);
-
-    const cdpPageId = url.searchParams.get('cdpPageId');
-    if (cdpPageId) {
-      const connection = browserGuidToDashboardConnection.get(guid);
-      if (!connection)
-        throw new Error('CDP connection not found for session: ' + guid);
-      const page = connection.pageForId(cdpPageId);
-      if (!page)
-        throw new Error('Page not found for page ID: ' + cdpPageId);
-      return new CDPConnection(page);
+  const submitAnnotation = (base64Png: string, annotations: AnnotationData[]) => {
+    if (waitingSockets.size === 0)
+      return;
+    const payload = JSON.stringify({ png: base64Png, annotations });
+    for (const socket of waitingSockets) {
+      socket.write(payload);
+      socket.end();
     }
+    waitingSockets.clear();
+  };
 
-    const cdpUrl = new URL(httpServer.urlPrefix('human-readable'));
-    cdpUrl.pathname = httpServer.wsGuid()!;
-    cdpUrl.searchParams.set('guid', guid);
-    const connection = new DashboardConnection(browserDescriptor, cdpUrl, () => browserGuidToDashboardConnection.delete(guid));
-    browserGuidToDashboardConnection.set(guid, connection);
+  httpServer.createWebSocket(() => {
+    let connection: DashboardConnection;
+    // eslint-disable-next-line prefer-const
+    connection = new DashboardConnection(() => connections.delete(connection), () => {
+      if (currentReveal.sessionName)
+        connection.revealSession(currentReveal.sessionName, currentReveal.workspaceDir);
+      if (pendingAnnotate) {
+        pendingAnnotate = false;
+        connection.emitAnnotate();
+      }
+    }, submitAnnotation);
+    connections.add(connection);
     return connection;
-  });
+  }, 'ws');
 
   httpServer.routePrefix('/', (request: http.IncomingMessage, response: http.ServerResponse) => {
     const pathname = new URL(request.url!, `http://${request.headers.host}`).pathname;
@@ -174,30 +86,58 @@ async function innerOpenDashboardApp(): Promise<api.Page> {
       return false;
     return httpServer.serveFile(request, response, resolved);
   });
-  await httpServer.start();
-  const url = httpServer.urlPrefix('human-readable');
+  await httpServer.start({ port: options.port, host: options.host });
 
+  const reveal = (next: RevealOptions) => {
+    currentReveal = next;
+    if (!next.sessionName)
+      return;
+    for (const connection of connections)
+      connection.revealSession(next.sessionName, next.workspaceDir);
+  };
+
+  const triggerAnnotate = () => {
+    if (connections.size === 0) {
+      pendingAnnotate = true;
+      return;
+    }
+    for (const connection of connections)
+      connection.emitAnnotate();
+  };
+
+  const registerAnnotateWaiter = (socket: net.Socket) => {
+    waitingSockets.add(socket);
+    const cleanup = () => waitingSockets.delete(socket);
+    socket.on('close', cleanup);
+    socket.on('error', cleanup);
+  };
+
+  return { url: httpServer.urlPrefix('human-readable'), reveal, triggerAnnotate, registerAnnotateWaiter };
+}
+
+async function innerOpenDashboardApp(initialReveal: RevealOptions): Promise<{ page: api.Page; server: DashboardServer }> {
+  const server = await startDashboardServer({ reveal: initialReveal });
   const { page } = await launchApp('dashboard');
-  await page.goto(url);
-  return page;
+  await page.goto(server.url);
+  return { page, server };
 }
 
 async function launchApp(appName: string) {
   const channel = findChromiumChannelBestEffort('javascript');
-  const debugPort = parseInt(process.env.PLAYWRIGHT_DASHBOARD_DEBUG_PORT!, 10) || undefined;
   const context = await playwright.chromium.launchPersistentContext('', {
     ignoreDefaultArgs: ['--enable-automation'],
     channel,
-    headless: debugPort !== undefined,
+    headless: !!process.env.PW_DASHBOARD_APP_BIND_TITLE,
     args: [
       '--app=data:text/html,',
       '--test-type=',
       `--window-size=1280,800`,
       `--window-position=100,100`,
-      ...(debugPort !== undefined ? [`--remote-debugging-port=${debugPort}`] : []),
     ],
     viewport: null,
   });
+  if (process.env.PW_DASHBOARD_APP_BIND_TITLE)
+    await context.browser()?.bind(process.env.PW_DASHBOARD_APP_BIND_TITLE, { workspaceDir: process.cwd() });
 
   const [page] = context.pages();
   // Chromium on macOS opens a new tab when clicking on the dock icon.
@@ -224,7 +164,7 @@ async function launchApp(appName: string) {
 }
 
 export async function syncLocalStorageWithSettings(page: api.Page, appName: string) {
-  const settingsFile = path.join(registryDirectory, '.settings', `${appName}.json`);
+  const settingsFile = process.env.PLAYWRIGHT_DASHBOARD_SETTINGS_FILE_FOR_TEST ?? path.join(registryDirectory, '.settings', `${appName}.json`);
 
   await page.exposeBinding('_saveSerializedSettings', (_, settings) => {
     fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
@@ -253,19 +193,36 @@ function dashboardSocketPath() {
   return makeSocketPath('dashboard', 'app');
 }
 
-async function acquireSingleton(): Promise<net.Server> {
+type OpenArgs = { reveal: RevealOptions; port?: number; host?: string; annotate: boolean };
+
+function parseOpenArgs(): OpenArgs {
+  const args = minimist(process.argv.slice(2), { string: ['session', 'workspace', 'host'], boolean: ['annotate'] });
+  const portStr = args.port as string | undefined;
+  return {
+    reveal: {
+      sessionName: (args.session as string) || undefined,
+      workspaceDir: (args.workspace as string) || undefined,
+    },
+    port: portStr !== undefined ? Number(portStr) : undefined,
+    host: (args.host as string) || undefined,
+    annotate: !!args.annotate,
+  };
+}
+
+async function acquireSingleton(reveal: RevealOptions): Promise<net.Server> {
   const socketPath = dashboardSocketPath();
   if (process.platform !== 'win32')
     await fs.promises.mkdir(path.dirname(socketPath), { recursive: true });
 
   return await new Promise((resolve, reject) => {
-    const server = net.createServer();
+    const server = net.createServer({ allowHalfOpen: true });
     server.listen(socketPath, () => resolve(server));
     server.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code !== 'EADDRINUSE')
         return reject(err);
       const client = net.connect(socketPath, () => {
-        client.write('bringToFront');
+        const message: DashboardCommand = { command: 'bringToFront', ...reveal };
+        client.write(JSON.stringify(message));
         client.end();
         reject(new Error('already running'));
       });
@@ -279,25 +236,108 @@ async function acquireSingleton(): Promise<net.Server> {
 }
 
 export async function openDashboardApp() {
-  let server: net.Server | undefined;
-  process.on('exit', () => server?.close());
+  const args = parseOpenArgs();
+  if (args.annotate) {
+    await runAnnotateClient(args);
+    return;
+  }
   process.on('unhandledRejection', error => {
     // eslint-disable-next-line no-console
     console.error('Unhandled promise rejection:', error);
   });
-  const underTest = !!process.env.PLAYWRIGHT_DASHBOARD_DEBUG_PORT;
-  if (!underTest) {
-    try {
-      server = await acquireSingleton();
-    } catch {
-      return;
-    }
+  if (args.port !== undefined) {
+    const { url } = await startDashboardServer({ port: args.port, host: args.host, reveal: args.reveal });
+    // eslint-disable-next-line no-console
+    console.log(`Listening on ${url}`);
+    selfDestructOnParentGone();
+    return;
   }
-  const page = await innerOpenDashboardApp();
+  let server: net.Server | undefined;
+  process.on('exit', () => server?.close());
+  try {
+    server = await acquireSingleton(args.reveal);
+  } catch {
+    return;
+  }
+  const statePromise = innerOpenDashboardApp(args.reveal);
   server?.on('connection', socket => {
-    socket.on('data', data => {
-      if (data.toString() === 'bringToFront')
+    const chunks: Buffer[] = [];
+    socket.on('data', data => chunks.push(data));
+    socket.on('end', async () => {
+      const message = Buffer.concat(chunks).toString();
+      let parsed: DashboardCommand | undefined;
+      try {
+        parsed = JSON.parse(message);
+      } catch {
+        // no-op
+      }
+      if (!parsed?.command)
+        return;
+      const { page, server: dashboard } = await statePromise;
+      const revealTo = { sessionName: parsed.sessionName, workspaceDir: parsed.workspaceDir };
+      if (parsed.command === 'bringToFront') {
         page?.bringToFront().catch(() => {});
+        dashboard.reveal(revealTo);
+      } else if (parsed.command === 'annotate') {
+        page?.bringToFront().catch(() => {});
+        dashboard.reveal(revealTo);
+        dashboard.triggerAnnotate();
+        dashboard.registerAnnotateWaiter(socket);
+      }
     });
+  });
+  await statePromise;
+}
+
+async function runAnnotateClient(args: OpenArgs): Promise<void> {
+  selfDestructOnParentGone();
+
+  const socketPath = dashboardSocketPath();
+  const tryConnect = () => new Promise<net.Socket | undefined>(resolve => {
+    const s = net.connect(socketPath);
+    const onError = () => { s.destroy(); resolve(undefined); };
+    s.once('connect', () => { s.off('error', onError); resolve(s); });
+    s.once('error', onError);
+  });
+  const deadline = Date.now() + 15000;
+  let socket: net.Socket | undefined;
+  while (Date.now() < deadline) {
+    socket = await tryConnect();
+    if (socket)
+      break;
+    await new Promise(r => setTimeout(r, 200));
+  }
+  if (!socket) {
+    // eslint-disable-next-line no-console
+    console.error('Dashboard did not start in time.');
+    gracefullyProcessExitDoNotHang(1);
+    return;
+  }
+  const message: DashboardCommand = { command: 'annotate', ...args.reveal };
+  socket.end(JSON.stringify(message));
+  const chunks: Buffer[] = [];
+  await new Promise<void>((resolve, reject) => {
+    socket!.on('data', chunk => chunks.push(chunk));
+    socket!.on('end', () => resolve());
+    socket!.on('error', reject);
+  });
+  socket.destroy();
+  const text = Buffer.concat(chunks).toString();
+  if (!text)
+    return;
+  const { png, annotations } = JSON.parse(text) as { png: string; annotations: AnnotationData[] };
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const filePath = await saveOutputFile(`annotations-${timestamp}.png`, Buffer.from(png, 'base64'));
+  for (const a of annotations) {
+    // eslint-disable-next-line no-console
+    console.log(`{ x: ${a.x}, y: ${a.y}, width: ${a.width}, height: ${a.height} }: ${a.text}`);
+  }
+  // eslint-disable-next-line no-console
+  console.log(`image available at: ${path.relative(process.cwd(), filePath)}`);
+}
+
+function selfDestructOnParentGone() {
+  process.stdin.on('close', () => {
+    gracefullyProcessExitDoNotHang(0);
   });
 }

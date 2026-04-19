@@ -1,14 +1,22 @@
 [program.ts]
 "strict"
-./minimist.ts
-./session.ts
-./registry.ts
 ../../package.ts
 ../../serverRegistry.ts
+./channelSessions.ts
+./minimist.ts
+./output.ts
+./session.ts
+./registry.ts
+
+[output.ts]
+"strict"
+./channelSessions.ts
+
+[channelSessions.ts]
+"strict"
 
 [session.ts]
 "strict"
-./minimist.ts
 ../../package.ts
 ../utils/socketConnection.ts
 ./registry.ts

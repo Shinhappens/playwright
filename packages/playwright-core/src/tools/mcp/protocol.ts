@@ -14,9 +14,14 @@
  * limitations under the License.
  */
 
-// Whenever the commands/events change, the version must be updated. The latest
-// extension version should be compatible with the old MCP clients.
-export const VERSION = 2;
+// The latest protocol version defined in this file. Bumped whenever the
+// commands/events change. The latest extension version should remain
+// compatible with older MCP clients.
+export const LATEST_VERSION = 2;
+
+// The protocol version used by default when PLAYWRIGHT_EXTENSION_PROTOCOL is
+// not set. May lag behind LATEST_VERSION while a new version is rolling out.
+export const DEFAULT_VERSION = 1;
 
 // Structural mirrors of @types/chrome shapes used over the wire. The extension
 // imports the real chrome.* types and they are structurally compatible.
@@ -44,7 +49,7 @@ export type TabRemoveInfo = { windowId: number; isWindowClosing: boolean };
 
 // Protocol v2: command params/results mirror chrome.* positional arguments,
 // so the extension can spread them straight into chrome.<api>.<method>(...).
-export type ExtensionCommand = {
+export type ExtensionCommandV2 = {
   // chrome.debugger.attach(target, requiredVersion)
   'chrome.debugger.attach': {
     params: [target: Debuggee, requiredVersion: string];
@@ -65,6 +70,11 @@ export type ExtensionCommand = {
     params: [createProperties: TabCreateProperties];
     result: Tab;
   };
+  // chrome.tabs.remove(tabIds)
+  'chrome.tabs.remove': {
+    params: [tabIds: number | number[]];
+    result: void;
+  };
   // Playwright-specific: ask the user to pick a tab via the connect UI.
   'extension.selectTab': {
     params: [];
@@ -72,8 +82,8 @@ export type ExtensionCommand = {
   };
 };
 
-// Event params mirror chrome.<api>.<event>.addListener callback signatures.
-export type ExtensionEvents = {
+// Protocol v2 events mirror chrome.<api>.<event>.addListener callback signatures.
+export type ExtensionEventsV2 = {
   // chrome.debugger.onEvent: (source, method, params?) => void
   'chrome.debugger.onEvent': {
     params: [source: DebuggerSession, method: string, eventParams?: object];
@@ -92,8 +102,7 @@ export type ExtensionEvents = {
   };
 };
 
-// Protocol v1: legacy single-tab interface. Kept for backward compatibility
-// with older MCP clients; will be removed in a future release.
+// Protocol v1: legacy single-tab interface.
 export type ExtensionCommandV1 = {
   'attachToTab': {
     params: {};
@@ -118,3 +127,7 @@ export type ExtensionEventsV1 = {
     };
   };
 };
+
+// Combined types for the relay which supports both protocol versions.
+export type ExtensionCommand = ExtensionCommandV1 & ExtensionCommandV2;
+export type ExtensionEvents = ExtensionEventsV1 & ExtensionEventsV2;

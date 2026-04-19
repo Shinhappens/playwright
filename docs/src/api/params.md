@@ -134,6 +134,18 @@ Defaults to `left`.
   - `mimeType` <[string]> File type
   - `buffer` <[Buffer]> File content
 
+## drop-payload
+- `payload` <[Object]>
+  - `files` ?<[path]|[Array]<[path]>|[Object]|[Array]<[Object]>>
+    - `name` <[string]> File name
+    - `mimeType` <[string]> File type
+    - `buffer` <[Buffer]> File content
+  - `data` ?<[Object]<[string], [string]>>
+
+Data to drop onto the target. Provide `files` (file paths or in-memory buffers), `data`
+(a mime-type → string map for clipboard-like content such as `text/plain`, `text/html`,
+`text/uri-list`), or both.
+
 ## input-down-up-delay
 - `delay` <[float]>
 
@@ -751,18 +763,6 @@ Emulates `'prefers-contrast'` media feature, supported values are `'no-preferenc
 
 Logger sink for Playwright logging.
 
-## context-option-videospath
-* langs: js
-* deprecated: Use [`option: recordVideo`] instead.
-- `videosPath` <[path]>
-
-## context-option-videosize
-* langs: js
-* deprecated: Use [`option: recordVideo`] instead.
-- `videoSize` <[Object]>
-  - `width` <[int]> Video frame width.
-  - `height` <[int]> Video frame height.
-
 ## context-option-recordhar
 * langs: js
 - `recordHar` <[Object]>
@@ -1066,8 +1066,6 @@ between the same pixel in compared images, between zero (strict) and one (lax), 
 - %%-context-option-contrast-%%
 - %%-context-option-contrast-csharp-python-%%
 - %%-context-option-logger-%%
-- %%-context-option-videospath-%%
-- %%-context-option-videosize-%%
 - %%-context-option-recordhar-%%
 - %%-context-option-recordhar-path-%%
 - %%-context-option-recordhar-omit-content-%%

@@ -60,7 +60,6 @@ const ignores = [
   "test-results/",
   "tests/assets/",
   "tests/components/",
-  "tests/config/ghaMarkdownReporter.ts",
   "tests/installation/fixture-scripts/",
   "tests/third_party/",
   "utils/",
@@ -287,6 +286,8 @@ const reactFiles = [
   `packages/recorder/src/**/*.tsx`,
   `packages/trace-viewer/src/**/*.ts`,
   `packages/trace-viewer/src/**/*.tsx`,
+  `packages/dashboard/src/**/*.ts`,
+  `packages/dashboard/src/**/*.tsx`,
   `packages/web/src/**/*.ts`,
   `packages/web/src/**/*.tsx`,
 ];
@@ -428,7 +429,7 @@ export default [
   },
   {
     files: [
-      "packages/playwright-core/src/utils/**/*.ts",
+      "packages/isomorphic/**/*.ts",
     ],
     languageOptions: languageOptionsWithTsConfig,
     rules: {
@@ -473,6 +474,7 @@ export default [
   {
     files: [
       "packages/playwright-core/src/server/**/*.ts",
+      "packages/utils/**/*.ts",
     ],
     plugins: {
       "progress": progressPlugin,

@@ -53,6 +53,7 @@ export async function startCliDaemonServer(
   clientInfo: ClientInfo,
   mcpClientInfo: McpClientInfo,
   options: {
+    ownership?: 'attached' | 'own',
     persistent?: boolean,
     exitOnClose?: boolean,
   }
@@ -89,7 +90,7 @@ export async function startCliDaemonServer(
             await sendAck();
         } else if (method === 'run') {
           const { toolName, toolParams } = parseCliCommand(params.args);
-          toolParams._meta = { cwd: params.cwd, raw: params.raw };
+          toolParams._meta = { cwd: params.cwd, raw: params.raw || params.json, json: !!params.json };
           const response = await backend.callTool(toolName, toolParams);
           await connection.send({ id, result: formatResult(response) });
         } else {
@@ -150,6 +151,7 @@ function daemonSocketPath(clientInfo: ClientInfo, sessionName: string): string {
 }
 
 function createSessionConfig(clientInfo: ClientInfo, sessionName: string, browserInfo: BrowserInfo, options: {
+  ownership?: 'attached' | 'own',
   persistent?: boolean,
   exitOnStop?: boolean,
 } = {}): SessionConfig {
@@ -159,6 +161,7 @@ function createSessionConfig(clientInfo: ClientInfo, sessionName: string, browse
     timestamp: Date.now(),
     socketPath: daemonSocketPath(clientInfo, sessionName),
     workspaceDir: clientInfo.workspaceDir,
+    attached: options.ownership === 'attached' ? true : undefined,
     cli: { persistent: options.persistent },
     browser: {
       browserName: browserInfo.browserName,

@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { iso, sever } from '../../packages/playwright-core/lib/coreBundle';
-const { nullProgress } = sever;
+import { iso, server as coreServer } from '../../packages/playwright-core/lib/coreBundle';
+const { nullProgress } = coreServer;
 import { test, expect } from './pageTest';
 
 const { MultiMap } = iso;
@@ -24,7 +24,7 @@ function leakedJSHandles(): string {
   const map = new MultiMap();
   for (const [h, e] of (globalThis as any).leakedJSHandles) {
     const name = `[${h.worldNameForTest()}] ${h.preview()}`;
-    if (name === '[main] UtilityScript' || name === '[utility] UtilityScript' || name === '[electron] UtilityScript' || name === '[main] InjectedScript' || name === '[utility] InjectedScript' || name === '[electron] ElectronModule')
+    if (name === '[main] UtilityScript' || name === '[utility] UtilityScript' || name === '[electron] UtilityScript' || name === '[worker] UtilityScript' || name === '[main] InjectedScript' || name === '[utility] InjectedScript' || name === '[electron] ElectronModule' || name === '[worker] ElectronModule')
       continue;
     map.set(e.stack, name);
   }

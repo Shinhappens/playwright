@@ -491,7 +491,6 @@ LaunchOptions:
     ignoreDefaultArgs:
       type: array?
       items: string
-    assistantMode: boolean?
     handleSIGINT: boolean?
     handleSIGTERM: boolean?
     handleSIGHUP: boolean?
@@ -791,7 +790,6 @@ Playwright:
     firefox: BrowserType
     webkit: BrowserType
     android: Android
-    electron: Electron
     utils: LocalUtils?
     # Only present when connecting remotely via BrowserType.connect() method.
     preLaunchedBrowser: Browser?
@@ -1035,13 +1033,13 @@ BrowserType:
         browser: Browser
         defaultContext: BrowserContext?
 
-    connectOverCDPTransport:
-      title: Connect over CDP transport
+    connectToWorker:
+      title: Connect to worker
       parameters:
-        transport: binary
+        endpoint: string
+        timeout: float
       returns:
-        browser: Browser
-        defaultContext: BrowserContext?
+        worker: Worker
 
 Browser:
   type: interface
@@ -1282,7 +1280,6 @@ BrowserContext:
       group: configuration
       parameters:
         name: string
-        needsHandle: boolean?
       returns:
         disposable: Disposable
 
@@ -1442,21 +1439,6 @@ BrowserContext:
       returns:
         session: CDPSession
 
-    harStart:
-      internal: true
-      parameters:
-        page: Page?
-        options: RecordHarOptions
-      returns:
-        harId: string
-
-    harExport:
-      internal: true
-      parameters:
-        harId: string?
-      returns:
-        artifact: Artifact
-
     createTempFiles:
       internal: true
       parameters:
@@ -1532,6 +1514,10 @@ BrowserContext:
     bindingCall:
       parameters:
         binding: BindingCall
+
+    pickLocator:
+      parameters:
+        page: Page
 
     console:
       parameters:
@@ -1695,7 +1681,6 @@ Page:
       group: configuration
       parameters:
         name: string
-        needsHandle: boolean?
       returns:
         disposable: Disposable
 
@@ -2113,6 +2098,10 @@ Page:
       title: Cancel pick locator
       group: configuration
 
+    hideHighlight:
+      title: Hide all element highlights
+      group: configuration
+
     screencastShowOverlay:
       title: Show overlay
       group: configuration
@@ -2317,6 +2306,14 @@ Frame:
         snapshot: true
         pause: true
 
+    ariaRef:
+      internal: true
+      parameters:
+        selector: string
+        timeout: float
+      returns:
+        ref: string?
+
     ariaSnapshot:
       title: Aria snapshot
       group: getter
@@ -2417,6 +2414,42 @@ Frame:
         targetPosition: Point?
         strict: boolean?
         steps: int?
+      flags:
+        slowMo: true
+        snapshot: true
+        pause: true
+        input: true
+        isAutoWaiting: true
+
+    drop:
+      title: Drop files or data onto an element
+      parameters:
+        selector: string
+        strict: boolean?
+        position: Point?
+        # Only one of payloads, localPaths and streams may be present.
+        payloads:
+          type: array?
+          items:
+            type: object
+            properties:
+              name: string
+              mimeType: string?
+              buffer: binary
+        localPaths:
+          type: array?
+          items: string
+        streams:
+          type: array?
+          items: WritableStream
+        data:
+          type: array?
+          items:
+            type: object
+            properties:
+              mimeType: string
+              value: string
+        timeout: float
       flags:
         slowMo: true
         snapshot: true
@@ -2535,8 +2568,13 @@ Frame:
         resolvedSelector: string
 
     highlight:
-      title: Highlight element
-      group: configuration
+      internal: true
+      parameters:
+        selector: string
+        style: string?
+
+    hideHighlight:
+      internal: true
       parameters:
         selector: string
 
@@ -2951,6 +2989,11 @@ Frame:
         selector: string?
         expression: string
         expressionArg: json?
+        pseudo:
+          type: enum?
+          literals:
+          - before
+          - after
         expectedText:
           type: array?
           items: ExpectedTextValue
@@ -3000,6 +3043,13 @@ Worker:
 
   commands:
 
+    disconnect:
+      title: Disconnect from worker
+      parameters:
+        reason: string?
+      flags:
+        pausesBeforeAction: true
+
     evaluateExpression:
       title: Evaluate
       parameters:
@@ -3028,6 +3078,10 @@ Worker:
         enabled: boolean
 
   events:
+
+    console:
+      parameters:
+        $mixin: ConsoleMessage
 
     close:
 
@@ -3879,9 +3933,8 @@ BindingCall:
     frame: Frame
     name: string
     args:
-      type: array?
+      type: array
       items: SerializedValue
-    handle: JSHandle?
 
   commands:
 
@@ -4023,6 +4076,21 @@ Tracing:
       title: Stop tracing
       group: configuration
 
+    harStart:
+      internal: true
+      parameters:
+        page: Page?
+        options: RecordHarOptions
+      returns:
+        harId: string
+
+    harExport:
+      internal: true
+      parameters:
+        harId: string?
+      returns:
+        artifact: Artifact
+
 
 Artifact:
   type: interface
@@ -4123,132 +4191,6 @@ CDPSession:
 
     close:
 
-
-Electron:
-  type: interface
-
-  commands:
-
-    launch:
-      title: Launch electron
-      parameters:
-        executablePath: string?
-        args:
-          type: array?
-          items: string
-        chromiumSandbox: boolean?
-        cwd: string?
-        env:
-          type: array?
-          items: NameValue
-        timeout: float
-        acceptDownloads:
-          type: enum?
-          literals:
-          - accept
-          - deny
-          - internal-browser-default
-        bypassCSP: boolean?
-        colorScheme:
-          type: enum?
-          literals:
-          - dark
-          - light
-          - no-preference
-          - no-override
-        extraHTTPHeaders:
-          type: array?
-          items: NameValue
-        geolocation:
-          type: object?
-          properties:
-            longitude: float
-            latitude: float
-            accuracy: float?
-        httpCredentials:
-          type: object?
-          properties:
-            username: string
-            password: string
-            origin: string?
-        ignoreHTTPSErrors: boolean?
-        locale: string?
-        offline: boolean?
-        recordVideo:
-          type: object?
-          properties:
-            dir: string?
-            size:
-              type: object?
-              properties:
-                width: int
-                height: int
-            showActions:
-              type: object?
-              properties:
-                $mixin: ShowActionsOptions
-        strictSelectors: boolean?
-        timezoneId: string?
-        tracesDir: string?
-        artifactsDir: string?
-        selectorEngines:
-          type: array?
-          items: SelectorEngine
-        testIdAttributeName: string?
-
-      returns:
-        electronApplication: ElectronApplication
-
-
-ElectronApplication:
-  type: interface
-
-  extends: EventTarget
-
-  initializer:
-    context: BrowserContext
-
-  commands:
-
-    browserWindow:
-      internal: true
-      parameters:
-        page: Page
-      returns:
-        handle: JSHandle
-
-    evaluateExpression:
-      title: Evaluate
-      parameters:
-        expression: string
-        isFunction: boolean?
-        arg: SerializedArgument
-      returns:
-        value: SerializedValue
-
-    evaluateExpressionHandle:
-      title: Evaluate
-      parameters:
-        expression: string
-        isFunction: boolean?
-        arg: SerializedArgument
-      returns:
-        handle: JSHandle
-
-    updateSubscription:
-      internal: true
-      parameters:
-        event:
-          type: enum
-          literals:
-          - console
-        enabled: boolean
-
-  events:
-    close:
-    console:
-      parameters:
-        $mixin: ConsoleMessage
 
 Android:
   type: interface
@@ -4586,5 +4528,3 @@ JsonPipe:
     closed:
       parameters:
         reason: string?
-
-

@@ -27,11 +27,11 @@ import { MultiMap } from '@isomorphic/multimap';
 import { calculateSha1 } from '@utils/crypto';
 import { copyFileAndMakeWritable, removeFolders, sanitizeForFilePath, toPosixPath } from '@utils/fileUtils';
 import { getPackageManagerExecCommand } from '@utils/env';
-import { HttpServer } from '@utils/httpServer';
+import { serveFolder } from '@utils/httpServer';
 import { gracefullyProcessExitDoNotHang } from '@utils/processLauncher';
 
 import { CommonReporterOptions, formatError, formatResultFailure, internalScreen } from './base';
-import { babel } from '../common';
+import * as babel from '../transform/babelBundle';
 import { resolveReporterOutputPath, stripAnsiEscapes } from '../util';
 
 import type { ReportConfigureParams, ReportEndParams, ReporterV2 } from './reporterV2';
@@ -39,7 +39,7 @@ import type { HtmlReporterOptions as HtmlReporterConfigOptions, Metadata, TestAn
 import type * as api from '../../types/testReporter';
 import type { HTMLReport, HTMLReportOptions, Location, Stats, TestAttachment, TestCase, TestCaseSummary, TestFile, TestFileSummary, TestResult, TestStep } from '@html-reporter/types';
 import type { TransformCallback } from 'stream';
-import type { ZipFile } from 'playwright-core/lib/utilsBundle';
+import type { ZipFile } from 'yazl';
 
 type TestEntry = {
   testCase: TestCase;
@@ -222,7 +222,7 @@ export async function showHTMLReport(reportFolder: string | undefined, host: str
     gracefullyProcessExitDoNotHang(1);
     return;
   }
-  const server = startHtmlReportServer(folder);
+  const server = serveFolder(folder);
   await server.start({ port, host, preferredPort: port ? undefined : 9323 });
   let url = server.urlPrefix('human-readable');
   writeLine('');
@@ -232,26 +232,6 @@ export async function showHTMLReport(reportFolder: string | undefined, host: str
   url = url.replace('0.0.0.0', 'localhost');
   await open(url, { wait: true }).catch(() => {});
   await new Promise(() => {});
-}
-
-export function startHtmlReportServer(folder: string): HttpServer {
-  const server = new HttpServer();
-  server.routePrefix('/', (request, response) => {
-    let relativePath = new URL('http://localhost' + request.url).pathname;
-    if (relativePath.startsWith('/trace/file')) {
-      const url = new URL('http://localhost' + request.url!);
-      try {
-        return server.serveFile(request, response, url.searchParams.get('path')!);
-      } catch (e) {
-        return false;
-      }
-    }
-    if (relativePath === '/')
-      relativePath = '/index.html';
-    const absolutePath = path.join(folder, ...relativePath.split('/'));
-    return server.serveFile(request, response, absolutePath);
-  });
-  return server;
 }
 
 type DataMap = Map<string, { testFile: TestFile, testFileSummary: TestFileSummary }>;
@@ -266,7 +246,7 @@ class HtmlBuilder {
   private _options: HTMLReportOptions;
   private _doNotInlineAssets: boolean;
 
-  constructor(yazl: typeof import('playwright-core/lib/utilsBundle').yazl, config: api.FullConfig, outputDir: string, attachmentsBaseURL: string, doNotInlineAssets: boolean, options: HTMLReportOptions) {
+  constructor(yazl: typeof import('yazl'), config: api.FullConfig, outputDir: string, attachmentsBaseURL: string, doNotInlineAssets: boolean, options: HTMLReportOptions) {
     this._dataZipFile = new yazl.ZipFile();
     this._config = config;
     this._reportFolder = outputDir;

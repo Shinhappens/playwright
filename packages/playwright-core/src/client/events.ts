@@ -39,6 +39,7 @@ export const Events = {
   },
 
   BrowserContext: {
+    PickLocator: 'picklocator',
     Console: 'console',
     Close: 'close',
     Dialog: 'dialog',
@@ -92,11 +93,5 @@ export const Events = {
   Worker: {
     Close: 'close',
     Console: 'console',
-  },
-
-  ElectronApplication: {
-    Close: 'close',
-    Console: 'console',
-    Window: 'window',
   },
 };

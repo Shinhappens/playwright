@@ -35,6 +35,10 @@ export type WaitForFunctionOptions = TimeoutOptions & { polling?: 'raf' | number
 export type SelectOption = { value?: string, label?: string, index?: number, valueOrLabel?: string };
 export type SelectOptionOptions = TimeoutOptions & { force?: boolean };
 export type FilePayload = { name: string, mimeType: string, buffer: Buffer };
+export type DropPayload = {
+  files?: string | FilePayload | string[] | FilePayload[],
+  data?: { [mimeType: string]: string },
+};
 export type StorageState = {
   cookies: channels.NetworkCookie[],
   origins: (Omit<channels.OriginStorage, 'indexedDB'>)[],
@@ -62,8 +66,6 @@ export type BrowserContextOptions = Omit<channels.BrowserNewContextOptions, 'vie
   viewport?: Size | null;
   extraHTTPHeaders?: Headers;
   logger?: Logger;
-  videosPath?: string;
-  videoSize?: Size;
   storageState?: string | SetStorageState;
   har?: {
     path: string;
@@ -102,7 +104,6 @@ export type ConnectOptions = {
   exposeNetwork?: string;
   slowMo?: number;
   timeout?: number;
-  logger?: Logger;
 };
 export type LaunchServerOptions = LaunchOptions & {
   host?: string,
