@@ -20,11 +20,13 @@ import { execSync, spawn } from 'child_process';
 
 import crypto from 'crypto';
 import os from 'os';
+import path from 'path';
 
-import { listChannelSessions } from './channelSessions';
+import { isKnownChannel, listChannelSessions } from './channelSessions';
 import { JsonOutput, TextOutput } from './output';
 import { clientKey, createClientInfo, explicitSessionName, Registry, resolveSessionName } from './registry';
 import { Session } from './session';
+import { isCodingAgent } from './utils';
 import { libPath } from '../../package';
 import { serverRegistry } from '../../serverRegistry';
 import { minimist } from './minimist';
@@ -92,8 +94,16 @@ export async function program(options?: { embedderVersion?: string}) {
   }
 
   const command = commandName && help.commands[commandName];
-  if (args.help || args.h) {
-    output.help(command ? command.help : 'playwright-cli - run playwright mcp commands from terminal\n\n' + help.global);
+  if (args.help || args.h || !commandName) {
+    if (command) {
+      output.help(command.help);
+    } else {
+      const lines = ['playwright-cli - run playwright mcp commands from terminal'];
+      if (isCodingAgent())
+        lines.push(`Agent skill: ${path.relative(process.cwd(), libPath('tools', 'cli-client', 'skill', 'SKILL.md'))}`);
+      lines.push(help.global);
+      output.help(lines.join('\n\n'));
+    }
     process.exit(0);
   }
 
@@ -150,22 +160,36 @@ export async function program(options?: { embedderVersion?: string}) {
         output.errorAttachConflict();
       if (attachTarget)
         args.endpoint = attachTarget;
-      if (typeof args.extension === 'string') {
-        args.browser = args.extension;
+      const extensionChannel = typeof args.extension === 'string' ? args.extension : undefined;
+      if (extensionChannel) {
+        args.browser = extensionChannel;
         args.extension = true;
       }
-      const attachSessionName = explicitSessionName(args.session as string) ?? attachTarget ?? sessionName;
+
+      const cdpChannel = typeof args.cdp === 'string' && isKnownChannel(args.cdp) ? args.cdp : undefined;
+      const targetName = attachTarget ?? cdpChannel ?? extensionChannel ?? args.cdp as string;
+      if (!targetName)
+        output.errorAttachNoTarget();
+      const attachSessionName = explicitSessionName(args.session as string) ?? attachTarget ?? cdpChannel ?? extensionChannel ?? sessionName;
       args.session = attachSessionName;
-      const { pid, endpoint } = await startSession(attachSessionName, registry, clientInfo, args, 'attach');
+      const { pid } = await startSession(attachSessionName, registry, clientInfo, args, 'attach');
       const newEntry = await registry.loadEntry(clientInfo, attachSessionName);
       const toolText = await runInSession(newEntry, clientInfo, { _: ['snapshot'], filename: '<auto>' }, output);
-      output.attach(attachSessionName, pid, endpoint, toolText);
+      output.attach(attachSessionName, pid, targetName, toolText);
       return;
     }
     case 'close': {
       const closeEntry = registry.entry(clientInfo, sessionName);
       const { wasOpen } = closeEntry ? await new Session(closeEntry).stop() : { wasOpen: false };
       output.close(sessionName, wasOpen);
+      return;
+    }
+    case 'detach': {
+      const detachEntry = registry.entry(clientInfo, sessionName);
+      if (detachEntry && !detachEntry.config.attached)
+        output.errorDetachNotAttached(sessionName);
+      const { wasOpen } = detachEntry ? await new Session(detachEntry).stop() : { wasOpen: false };
+      output.detach(sessionName, wasOpen);
       return;
     }
     case 'install':
@@ -180,13 +204,19 @@ export async function program(options?: { embedderVersion?: string}) {
       const daemonScript = libPath('entry', 'dashboardApp.js');
       const daemonArgs = [
         daemonScript,
-        `--session=${sessionName}`,
-        `--workspace=${clientInfo.workspaceDir ?? ''}`,
+        `--sessionName=${sessionName}`,
+        `--workspaceDir=${clientInfo.workspaceDir ?? ''}`,
       ];
       if (args.port !== undefined)
         daemonArgs.push(`--port=${args.port}`);
       if (args.host !== undefined)
         daemonArgs.push(`--host=${args.host as string}`);
+      if (args.kill) {
+        daemonArgs.push(`--kill`);
+        const child = spawn(process.execPath, daemonArgs, { stdio: 'ignore' });
+        await new Promise<void>(resolve => child.on('exit', () => resolve()));
+        return;
+      }
       if (args.annotate) {
         const dashboard = spawn(process.execPath, daemonArgs, { detached: true, stdio: 'ignore' });
         dashboard.unref();
@@ -263,7 +293,7 @@ const daemonProcessPatterns = ['run-mcp-server', 'run-cli-server', 'cli-daemon',
 
 async function killAllDaemons(): Promise<number[]> {
   const platform = os.platform();
-  const pidFilterEnv = process.env.PLAYWRIGHT_KILL_ALL_PID_FILTER_FOR_TEST;
+  const pidFilterEnv = process.env.PWTEST_KILL_ALL_PID_FILTER_FOR_TEST;
   const pidFilter = pidFilterEnv ? new Set(pidFilterEnv.split(',').map(p => parseInt(p, 10)).filter(n => !isNaN(n))) : undefined;
   const killed: number[] = [];
 
@@ -315,6 +345,9 @@ async function killAllDaemons(): Promise<number[]> {
 async function collectList(registry: Registry, clientInfo: ClientInfo, all: boolean): Promise<ListData> {
   const browsers: ListedBrowser[] = [];
   const entries = registry.entryMap();
+
+  // List early to GC.
+  const serverEntries = await serverRegistry.list();
   const key = clientKey(clientInfo);
   for (const [workspaceKey, list] of entries) {
     if (!all && workspaceKey !== key)
@@ -322,7 +355,7 @@ async function collectList(registry: Registry, clientInfo: ClientInfo, all: bool
     for (const entry of list) {
       const session = new Session(entry);
       const canConnect = await session.canConnect();
-      if (!canConnect && !session.config.cli.persistent) {
+      if (!canConnect) {
         await session.deleteSessionConfig();
         continue;
       }
@@ -346,7 +379,6 @@ async function collectList(registry: Registry, clientInfo: ClientInfo, all: bool
   if (!all)
     return { all, browsers };
 
-  const serverEntries = await serverRegistry.list();
   const servers = [...serverEntries.values()].flat();
   return { all, browsers, servers, channelSessions: await listChannelSessions() };
 }

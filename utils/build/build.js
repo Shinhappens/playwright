@@ -549,19 +549,19 @@ for (const pkg of workspace.packages()) {
   }));
 }
 
-// playwright-electron/lib/electron.js — self-contained bundle that inlines
+// playwright-electron/lib/index.js — self-contained bundle that inlines
 // @utils/* and @isomorphic/* sources (via tsconfig paths) plus the `node_modules`
-// deps. playwright-core, electron, and the sibling loader.js are resolved at
+// deps. playwright, electron, and the sibling loader.js are resolved at
 // runtime.
 {
   const electronPkg = filePath('packages/playwright-electron');
   steps.push(new EsbuildStep({
     bundle: true,
-    entryPoints: [path.join(electronPkg, 'src/electron.ts')],
-    outfile: path.join(electronPkg, 'lib/electron.js'),
+    entryPoints: [path.join(electronPkg, 'src/index.ts')],
+    outfile: path.join(electronPkg, 'lib/index.js'),
     external: [
-      'playwright-core',
-      'playwright-core/*',
+      'playwright',
+      'playwright/*',
       'electron',
       'electron/*',
       './loader',
@@ -593,6 +593,7 @@ steps.push(new EsbuildStep({
     filePath('packages/playwright-core/src/tools/cli-client/*.ts'),
     filePath('packages/playwright-core/src/package.ts'),
     filePath('packages/playwright-core/src/tools/utils/socketConnection.ts'),
+    filePath('packages/playwright-core/src/tools/utils/extension.ts'),
   ],
   outdir: filePath('packages/playwright-core/lib'),
   plugins: [dynamicImportToRequirePlugin],
@@ -634,6 +635,13 @@ steps.push(new EsbuildStep({
     'chromium-bidi/*',
     'mitt',
   ],
+  // HMR: baked-in flag that enables the embedded Vite dev server for the
+  // dashboard and trace viewer (incl. UI mode) in watch builds. In release
+  // builds it's `false` and esbuild dead-code-eliminates the whole dev-server
+  // branch (including the `import('vite')` call).
+  define: {
+    __PW_HMR__: String(!!watchMode),
+  },
   plugins: [{
     name: 'externalize-utilsBundle',
     setup: build => build.onResolve({ filter: /utilsBundle/ },
@@ -761,6 +769,11 @@ steps.push(new EsbuildStep({
     '../transform/babelBundle',
     '../transform/esmLoader',
   ],
+  // HMR: same flag as coreBundle; enables the html-reporter Vite dev server
+  // in watch builds (reporters/html.ts lives in this bundle).
+  define: {
+    __PW_HMR__: String(!!watchMode),
+  },
   plugins: [dynamicImportToRequirePlugin],
 }, [filePath('packages/playwright/src')]));
 
@@ -876,7 +889,17 @@ steps.push(new ProgramStep({
 }));
 
 // Build/watch web packages.
-for (const webPackage of ['html-reporter', 'recorder', 'trace-viewer', 'dashboard']) {
+// HMR: in watch mode the dashboard, html-reporter, and trace viewer (incl. UI
+// mode) are served by embedded Vite dev servers, so skip their
+// `vite build --watch` steps. Set PW_HMR_STATIC=1 to keep the watch builds for
+// testing the bundled output. Recorder is not yet HMR'd. The trace viewer
+// service worker still builds via vite.sw.config.ts above — that step is not
+// in this loop.
+const hmrReplacesWebBuilds = watchMode && process.env.PW_HMR_STATIC !== '1';
+const hmrHandledPackages = new Set(['dashboard', 'html-reporter', 'trace-viewer']);
+const webPackages = ['html-reporter', 'recorder', 'trace-viewer', 'dashboard']
+    .filter(pkg => !(hmrReplacesWebBuilds && hmrHandledPackages.has(pkg)));
+for (const webPackage of webPackages) {
   steps.push(new ProgramStep({
     command: 'npx',
     args: [

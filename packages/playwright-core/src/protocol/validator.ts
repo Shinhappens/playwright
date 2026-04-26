@@ -631,6 +631,7 @@ scheme.BrowserTypeConnectOverCDPParams = tObject({
   slowMo: tOptional(tFloat),
   timeout: tFloat,
   isLocal: tOptional(tBoolean),
+  noDefaults: tOptional(tBoolean),
 });
 scheme.BrowserTypeConnectOverCDPResult = tObject({
   browser: tChannel(['Browser']),
@@ -937,9 +938,6 @@ scheme.BrowserContextInitializer = tObject({
 });
 scheme.BrowserContextBindingCallEvent = tObject({
   binding: tChannel(['BindingCall']),
-});
-scheme.BrowserContextPickLocatorEvent = tObject({
-  page: tChannel(['Page']),
 });
 scheme.BrowserContextConsoleEvent = tObject({
   type: tString,
@@ -1662,6 +1660,7 @@ scheme.FrameAriaSnapshotParams = tObject({
   track: tOptional(tString),
   selector: tOptional(tString),
   depth: tOptional(tInt),
+  boxes: tOptional(tBoolean),
   timeout: tFloat,
 });
 scheme.FrameAriaSnapshotResult = tObject({
@@ -2041,7 +2040,10 @@ scheme.FrameExpectParams = tObject({
 });
 scheme.FrameExpectResult = tObject({
   matches: tBoolean,
-  received: tOptional(tType('SerializedValue')),
+  received: tOptional(tObject({
+    value: tOptional(tType('SerializedValue')),
+    ariaSnapshot: tOptional(tString),
+  })),
   timedOut: tOptional(tBoolean),
   errorMessage: tOptional(tString),
   log: tOptional(tArray(tString)),
@@ -2432,6 +2434,7 @@ scheme.RouteFulfillParams = tObject({
 scheme.RouteFulfillResult = tOptional(tObject({}));
 scheme.WebSocketRouteInitializer = tObject({
   url: tString,
+  protocols: tArray(tString),
 });
 scheme.WebSocketRouteMessageFromPageEvent = tObject({
   message: tString,

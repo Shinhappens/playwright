@@ -21,21 +21,17 @@ import '@web/common.css';
 import './common.css';
 import { applyTheme } from '@web/theme';
 import { Dashboard } from './dashboard';
-import { SessionModel } from './sessionModel';
+import { DashboardModel } from './dashboardModel';
 import { DashboardClient } from './dashboardClient';
 import { SessionSidebar } from './sessionSidebar';
 import { SplitView } from '@web/components/splitView';
 
-import type { DashboardClientChannel } from './dashboardClient';
-
 applyTheme();
 
-export const DashboardClientContext = React.createContext<DashboardClientChannel | undefined>(undefined);
-
 const client = DashboardClient.create('/ws');
-const model = new SessionModel(client);
+const model = new DashboardModel(client);
 
-const pushVisibility = () => client.setVisible({ visible: !document.hidden }).catch(() => {});
+const pushVisibility = () => model.setVisible(!document.hidden);
 document.addEventListener('visibilitychange', pushVisibility);
 if (document.hidden)
   pushVisibility();
@@ -44,24 +40,22 @@ const App: React.FC = () => {
   const [, setRevision] = React.useState(0);
   React.useEffect(() => model.subscribe(() => setRevision(r => r + 1)), []);
 
-  return <DashboardClientContext.Provider value={client}>
-    <SplitView
-      orientation='horizontal'
-      sidebarIsFirst
-      sidebarSize={320}
-      minSidebarSize={220}
-      settingName='dashboardSessionSidebar'
-      sidebar={<SessionSidebar
-        model={model}
-        onSelectTab={tab => { void client.selectTab({ browser: tab.browser, page: tab.page }); }}
-        onCloseTab={tab => { void client.closeTab({ browser: tab.browser, page: tab.page }); }}
-        onNewTab={browser => { void client.newTab({ browser }); }}
-      />}
-      main={<div className='dashboard-shell-main'>
-        <Dashboard />
-      </div>}
-    />
-  </DashboardClientContext.Provider>;
+  return <SplitView
+    orientation='horizontal'
+    sidebarIsFirst
+    sidebarSize={320}
+    minSidebarSize={220}
+    settingName='dashboardSessionSidebar'
+    sidebar={<SessionSidebar model={model} />}
+    main={<div className='dashboard-shell-main'>
+      <Dashboard model={model} />
+    </div>}
+  />;
 };
 
-ReactDOM.createRoot(document.querySelector('#root')!).render(<App />);
+// HMR begin: cache the root on the DOM node so re-running this module during
+// an HMR update reuses it instead of calling createRoot twice on the same container.
+const rootElement = document.querySelector('#root')! as HTMLElement & { __dashboardRoot?: ReactDOM.Root };
+const root = rootElement.__dashboardRoot ??= ReactDOM.createRoot(rootElement);
+root.render(<App />);
+// HMR end

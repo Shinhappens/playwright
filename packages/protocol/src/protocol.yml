@@ -1029,6 +1029,7 @@ BrowserType:
         slowMo: float?
         timeout: float
         isLocal: boolean?
+        noDefaults: boolean?
       returns:
         browser: Browser
         defaultContext: BrowserContext?
@@ -1514,10 +1515,6 @@ BrowserContext:
     bindingCall:
       parameters:
         binding: BindingCall
-
-    pickLocator:
-      parameters:
-        page: Page
 
     console:
       parameters:
@@ -2327,6 +2324,7 @@ Frame:
         track: string?
         selector: string?
         depth: int?
+        boxes: boolean?
         timeout: float
       returns:
         snapshot: string
@@ -3004,7 +3002,11 @@ Frame:
         timeout: float
       returns:
         matches: boolean
-        received: SerializedValue?
+        received:
+          type: object?
+          properties:
+            value: SerializedValue?
+            ariaSnapshot: string?
         timedOut: boolean?
         errorMessage: string?
         log:
@@ -3747,6 +3749,9 @@ WebSocketRoute:
 
   initializer:
     url: string
+    protocols:
+      type: array
+      items: string
 
   commands:
 

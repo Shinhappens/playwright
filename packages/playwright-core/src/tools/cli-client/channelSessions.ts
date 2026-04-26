@@ -19,14 +19,21 @@ import net from 'net';
 import os from 'os';
 import path from 'path';
 
+import { isPlaywrightExtensionInstalled } from '../utils/extension';
+
 export type ChannelSession = {
   channel: string;
   userDataDir: string;
   endpoint?: string;
+  extensionInstalled: boolean;
 };
 
+export function isKnownChannel(name: string): boolean {
+  return channelToUserDataDir.has(name);
+}
+
 export async function listChannelSessions(): Promise<ChannelSession[]> {
-  if (process.env.PLAYWRIGHT_CLI_CHANNEL_SCAN_DISABLED_FOR_TEST)
+  if (process.env.PWTEST_CLI_CHANNEL_SCAN_DISABLED_FOR_TEST)
     return [];
   const result: ChannelSession[] = [];
   for (const [channel, dirs] of channelToUserDataDir) {
@@ -35,14 +42,13 @@ export async function listChannelSessions(): Promise<ChannelSession[]> {
       continue;
     if (!await pathExists(userDataDir))
       continue;
-    const endpoint = await readEndpoint(userDataDir);
-    result.push({ channel, userDataDir, endpoint });
+    const [endpoint, extensionInstalled] = await Promise.all([
+      readEndpoint(userDataDir),
+      isPlaywrightExtensionInstalled(userDataDir),
+    ]);
+    result.push({ channel, userDataDir, endpoint, extensionInstalled });
   }
   return result;
-}
-
-export function remoteDebuggingHint(channel: string): string {
-  return `to enable, launch ${channel}, navigate to chrome://inspect/#remote-debugging and check "Allow remote debugging for this browser instance"`;
 }
 
 async function pathExists(p: string): Promise<boolean> {
@@ -82,8 +88,7 @@ async function isPortOpen(port: number): Promise<boolean> {
   });
 }
 
-// Keep in sync with channelToUserDataDir in
-// packages/playwright-core/src/server/chromium/chromium.ts.
+// Keep in sync with packages/utils/chromiumChannels.ts.
 const channelToUserDataDir = new Map<string, Record<string, string>>([
   ['chrome', {
     'linux': path.join(os.homedir(), '.config', 'google-chrome'),

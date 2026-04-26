@@ -19,10 +19,10 @@
 
 import path from 'path';
 
-import { remoteDebuggingHint } from './channelSessions';
+import { playwrightExtensionInstallUrl } from '../utils/extension';
 
 import type { ChannelSession } from './channelSessions';
-import type { BrowserStatus } from '../../serverRegistry';
+import type { BrowserDescriptor } from '../../serverRegistry';
 
 export type ListedBrowser = {
   name: string;
@@ -40,7 +40,7 @@ export type ListedBrowser = {
 export type ListData = {
   all: boolean;
   browsers: ListedBrowser[];
-  servers?: BrowserStatus[];
+  servers?: BrowserDescriptor[];
   channelSessions?: ChannelSession[];
 };
 
@@ -53,7 +53,9 @@ export interface Output {
   errorUnknownCommand(name: string | undefined, globalHelp: string): never;
   errorUnknownOption(opts: string[], commandHelp: string): never;
   errorAttachConflict(): never;
+  errorDetachNotAttached(session: string): never;
   errorBrowserNotOpenForTool(session: string): never;
+  errorAttachNoTarget(): never;
 
   list(data: ListData): void;
   closeAll(sessions: string[]): void;
@@ -62,6 +64,7 @@ export interface Output {
   open(session: string, pid: number | undefined, toolResult: string): void;
   attach(session: string, pid: number | undefined, endpoint: string | undefined, toolResult: string): void;
   close(session: string, wasOpen: boolean): void;
+  detach(session: string, wasAttached: boolean): void;
   installed(): void;
   show(session: string, pid: number | undefined): void;
   toolResult(text: string): void;
@@ -98,10 +101,20 @@ export class TextOutput implements Output {
     return process.exit(1);
   }
 
+  errorDetachNotAttached(session: string): never {
+    console.error(`Error: session '${session}' was not attached; use \`playwright-cli${session !== 'default' ? ` -s=${session}` : ''} close\` to stop it.`);
+    return process.exit(1);
+  }
+
   errorBrowserNotOpenForTool(session: string): never {
     console.log(`The browser '${session}' is not open, please run open first`);
     console.log('');
     console.log(`  playwright-cli${session !== 'default' ? ` -s=${session}` : ''} open [params]`);
+    return process.exit(1);
+  }
+
+  errorAttachNoTarget(): never {
+    console.error(`Error: no target specified for attach command; use one of [name], --cdp, --endpoint, or --extension to specify the target to attach to.`);
     return process.exit(1);
   }
 
@@ -137,7 +150,7 @@ export class TextOutput implements Output {
       if (count)
         console.log('');
       console.log('### Browser servers available for attach');
-      const serversByWorkspace = new Map<string, BrowserStatus[]>();
+      const serversByWorkspace = new Map<string, BrowserDescriptor[]>();
       for (const server of servers) {
         let list = serversByWorkspace.get(server.workspaceDir ?? '');
         if (!list) {
@@ -197,7 +210,8 @@ export class TextOutput implements Output {
   attach(session: string, pid: number | undefined, endpoint: string | undefined, toolResult: string): void {
     if (endpoint) {
       console.log(`### Session \`${session}\` created, attached to \`${endpoint}\`.`);
-      console.log(`Run commands with: playwright-cli --session=${session} <command>`);
+      console.log(`Run commands with: playwright-cli --s=${session} <command>`);
+      console.log('');
     } else {
       console.log(`### Browser \`${session}\` opened with pid ${pid}.`);
     }
@@ -213,12 +227,20 @@ export class TextOutput implements Output {
     console.log(`Browser '${session}' closed\n`);
   }
 
+  detach(session: string, wasAttached: boolean): void {
+    if (!wasAttached) {
+      console.log(`Browser '${session}' is not attached.`);
+      return;
+    }
+    console.log(`Browser '${session}' detached\n`);
+  }
+
   installed(): void {
     // The spawned install subprocess handles its own output.
   }
 
   show(_session: string, pid: number | undefined): void {
-    if (process.env.PLAYWRIGHT_PRINT_DASHBOARD_PID_FOR_TEST)
+    if (process.env.PWTEST_PRINT_DASHBOARD_PID_FOR_TEST)
       console.log(`### Dashboard opened with pid ${pid}.`);
   }
 
@@ -257,8 +279,18 @@ export class JsonOutput implements Output {
     return process.exit(1);
   }
 
+  errorDetachNotAttached(session: string): never {
+    this._emit({ isError: true, error: `session '${session}' was not attached; use close to stop it.` });
+    return process.exit(1);
+  }
+
   errorBrowserNotOpenForTool(session: string): never {
     this._emit({ isError: true, error: `The browser '${session}' is not open, please run open first` });
+    return process.exit(1);
+  }
+
+  errorAttachNoTarget(): never {
+    this._emit({ isError: true, error: `no target specified for attach command; use one of [name], --cdp, --endpoint, or --extension to specify the target to attach to.` });
     return process.exit(1);
   }
 
@@ -298,6 +330,10 @@ export class JsonOutput implements Output {
 
   close(session: string, wasOpen: boolean): void {
     this._emit({ session, status: wasOpen ? 'closed' : 'not-open' });
+  }
+
+  detach(session: string, wasAttached: boolean): void {
+    this._emit({ session, status: wasAttached ? 'detached' : 'not-attached' });
   }
 
   installed(): void {
@@ -348,11 +384,10 @@ function renderBrowser(browser: ListedBrowser): string {
   return lines.join('\n');
 }
 
-function renderServer(server: BrowserStatus): string {
+function renderServer(server: BrowserDescriptor): string {
   const lines = [`- browser "${server.title}":`];
   lines.push(`  - browser: ${server.browser.browserName}`);
   lines.push(`  - version: v${server.playwrightVersion}`);
-  lines.push(`  - status: ${server.canConnect ? 'open' : 'closed'}`);
   if (server.browser.userDataDir)
     lines.push(`  - data-dir: ${server.browser.userDataDir}`);
   else
@@ -364,12 +399,15 @@ function renderServer(server: BrowserStatus): string {
 function renderChannelSession(session: ChannelSession): string {
   const lines = [`- ${session.channel}:`];
   lines.push(`  - data-dir: ${session.userDataDir}`);
+  if (session.extensionInstalled)
+    lines.push(`  - attach (extension): \`playwright-cli attach --extension=${session.channel}\``);
+  else
+    lines.push(`  - attach (extension): install at ${playwrightExtensionInstallUrl}`);
   if (session.endpoint) {
-    lines.push(`  - endpoint: ${session.endpoint}`);
-    lines.push(`  - run \`playwright-cli attach --cdp=${session.channel}\` to attach`);
+    lines.push(`  - attach (remote debugging): \`playwright-cli attach --cdp=${session.channel}\``);
   } else {
-    lines.push(`  - status: remote debugging not enabled`);
-    lines.push(`  - ${remoteDebuggingHint(session.channel)}`);
+    const inspectScheme = session.channel.startsWith('msedge') ? 'edge' : 'chrome';
+    lines.push(`  - attach (remote debugging): enable at ${inspectScheme}://inspect/#remote-debugging`);
   }
   return lines.join('\n');
 }

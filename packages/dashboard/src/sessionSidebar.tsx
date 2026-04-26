@@ -16,19 +16,19 @@
 
 import React from 'react';
 import './sessionSidebar.css';
-import { DashboardClientContext } from './index';
 import { SettingsButton } from './settingsView';
+import { BrowserIcon } from './icons';
 import { ToolbarButton } from '@web/components/toolbarButton';
+import { ListView } from '@web/components/listView';
 
-import type { Tab, DashboardChannelEvents } from './dashboardChannel';
-import type { SessionModel, SessionStatus } from './sessionModel';
+import type { SessionStatus, Tab } from './dashboardChannel';
+import type { DashboardModel } from './dashboardModel';
 
 type SessionSidebarProps = {
-  model: SessionModel;
-  onSelectTab: (tab: Tab) => void;
-  onCloseTab: (tab: Tab) => void;
-  onNewTab: (browser: string) => void;
+  model: DashboardModel;
 };
+
+const TabListView = ListView<Tab>;
 
 function tabFavicon(url: string): string {
   try {
@@ -55,34 +55,50 @@ function normalizeWorkspacePath(workspace: string, homeDir: string | undefined):
   return normalized;
 }
 
-export const SessionSidebar: React.FC<SessionSidebarProps> = ({ model, onSelectTab, onCloseTab, onNewTab }) => {
-  const client = React.useContext(DashboardClientContext);
-  const openSessions = React.useMemo(() => model.sessions.filter(session => session.canConnect), [model.sessions]);
-  const clientInfo = model.clientInfo;
-  const [allTabs, setAllTabs] = React.useState<Tab[] | null>(null);
+const TabRow: React.FC<{ tab: Tab; model: DashboardModel }> = ({ tab, model }) => {
+  return <>
+    {tab.faviconUrl
+      ? <img className='sidebar-tab-favicon' src={tab.faviconUrl} alt='' aria-hidden='true' />
+      : <span className='sidebar-tab-favicon placeholder' aria-hidden='true'>{tabFavicon(tab.url)}</span>}
+    <span className='sidebar-tab-text'>
+      <span className='sidebar-tab-title'>{tab.title || 'New Tab'}</span>
+      <span className='sidebar-tab-url'>{tab.url || 'about:blank'}</span>
+    </span>
+    <ToolbarButton
+      className='sidebar-tab-close'
+      icon='close'
+      title='Close tab'
+      onClick={e => {
+        e.stopPropagation();
+        model.closeTab(tab);
+      }}
+    />
+  </>;
+};
 
-  React.useEffect(() => {
-    if (!client)
-      return;
-    const onTabs = (params: DashboardChannelEvents['tabs']) => setAllTabs(params.tabs);
-    client.on('tabs', onTabs);
-    return () => client.off('tabs', onTabs);
-  }, [client]);
+export const SessionSidebar: React.FC<SessionSidebarProps> = ({ model }) => {
+  const { sessions, clientInfo, loadingSessions, tabs: allTabs } = model.state;
+  const openSessions = sessions;
 
-  const tabsByBrowser = React.useMemo(() => {
-    const map = new Map<string, Tab[]>();
+  const tabsByBrowserAndContext = React.useMemo(() => {
+    const map = new Map<string, Map<string, Tab[]>>();
     for (const tab of allTabs ?? []) {
-      let list = map.get(tab.browser);
+      let byContext = map.get(tab.browser);
+      if (!byContext) {
+        byContext = new Map();
+        map.set(tab.browser, byContext);
+      }
+      let list = byContext.get(tab.context);
       if (!list) {
         list = [];
-        map.set(tab.browser, list);
+        byContext.set(tab.context, list);
       }
       list.push(tab);
     }
     return map;
   }, [allTabs]);
 
-  const activeBrowser = React.useMemo(() => allTabs?.find(t => t.selected)?.browser, [allTabs]);
+  const activeContext = React.useMemo(() => allTabs?.find(t => t.selected)?.context, [allTabs]);
 
   const workspaceGroups = React.useMemo(() => {
     const groups = new Map<string, SessionStatus[]>();
@@ -111,85 +127,71 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({ model, onSelectT
       <SettingsButton />
     </div>
     <div className='dashboard-shell-sidebar-content'>
-      {model.loading && <div className='sidebar-empty' role='status' aria-live='polite'>Loading sessions...</div>}
-      {!model.loading && openSessions.length === 0 && <div className='sidebar-empty' role='status' aria-live='polite'>No open sessions.</div>}
+      {loadingSessions && <p className='sidebar-empty' role='status' aria-live='polite'>Loading sessions...</p>}
+      {!loadingSessions && openSessions.length === 0 && <p className='sidebar-empty' role='status' aria-live='polite'>No open sessions.</p>}
       {workspaceGroups.map(([workspace, entries]) => {
         const workspacePath = normalizeWorkspacePath(workspace, clientInfo?.homeDir);
-        return <section key={workspace} className='workspace-group'>
+        return <section key={workspace} className='workspace-group' aria-label={`Workspace ${workspacePath}`}>
           <h3 className='workspace-header'>
             <span className='workspace-path-full' title={workspacePath}>{workspacePath}</span>
           </h3>
-          <div className='sidebar-session-list' role='list'>
-            {entries.map(session => {
-              const guid = session.browser.guid;
-              const browserType = session.browser.browserName;
-              const browserInitial = browserType ? browserType[0].toUpperCase() : '?';
-              const tabs = allTabs === null ? undefined : (tabsByBrowser.get(guid) ?? []);
-              return <div key={guid} className='session-chip sidebar-session' role='listitem' title={session.title}>
-                <div className='sidebar-session-row'>
-                  <div className='session-browser-icon-wrap' title={browserType}>
-                    <span className='session-browser-icon' aria-hidden='true'>{browserInitial}</span>
+          {entries.map(session => {
+            const guid = session.browser.guid;
+            const browserType = session.browser.browserName;
+            const channel = session.browser.launchOptions?.channel;
+            const byContext = tabsByBrowserAndContext.get(guid);
+            const contextEntries = byContext ? [...byContext.entries()] : [];
+            const rows: { contextGuid: string | null; tabs: Tab[] | undefined }[] =
+              allTabs === null
+                ? [{ contextGuid: null, tabs: undefined }]
+                : contextEntries.length === 0
+                  ? [{ contextGuid: null, tabs: [] }]
+                  : contextEntries.map(([contextGuid, tabs]) => ({ contextGuid, tabs }));
+            return rows.map((row, rowIdx) => {
+              const activeTab = row.tabs?.find(t => t.context === activeContext && t.selected);
+              const rowKey = `${guid}-${row.contextGuid ?? `placeholder-${rowIdx}`}`;
+              return <section
+                key={rowKey}
+                className={'sidebar-session session-chip' + (activeTab ? ' active' : '')}
+                aria-label={`Session ${session.title}`}
+              >
+                <header className='sidebar-session-row'>
+                  <div className='session-browser-icon-wrap' title={channel || browserType}>
+                    <span className='session-browser-icon' aria-hidden='true'>
+                      <BrowserIcon browserName={browserType} channel={channel} />
+                    </span>
                     <ToolbarButton
                       className='session-browser-close'
                       icon='close'
                       title='Close session'
-                      onClick={() => void model.closeSession(session)}
+                      onClick={() => model.closeSession(session)}
                     />
                   </div>
                   <span className='session-chip-name'>{session.title}</span>
                   <div className='sidebar-session-row-actions'>
-                    <ToolbarButton
+                    {row.contextGuid && <ToolbarButton
                       className='sidebar-session-new-tab'
                       icon='add'
                       title='New tab'
-                      onClick={() => onNewTab(guid)}
-                    />
+                      onClick={() => model.newTab(guid, row.contextGuid!)}
+                    />}
                   </div>
-                </div>
-                <div className='sidebar-tab-list' role='list' aria-label={`${session.title} tabs`}>
-                  {tabs === undefined && <div className='sidebar-tabs-loading' role='status' aria-live='polite'>Loading tabs...</div>}
-                  {tabs?.length === 0 && <div className='sidebar-tabs-empty' role='status' aria-live='polite'>No tabs open.</div>}
-                  {tabs?.map(tab => <div
-                    key={tab.page}
-                    className={'sidebar-tab' + (guid === activeBrowser && tab.selected ? ' active' : '')}
-                    role='listitem'
-                  >
-                    <div
-                      className='sidebar-tab-select'
-                      role='button'
-                      tabIndex={0}
-                      aria-current={guid === activeBrowser && tab.selected ? 'page' : undefined}
-                      title={tab.url || tab.title}
-                      onClick={() => onSelectTab(tab)}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          onSelectTab(tab);
-                        }
-                      }}
-                    >
-                      {tab.faviconUrl
-                        ? <img className='sidebar-tab-favicon' src={tab.faviconUrl} alt='' aria-hidden='true' />
-                        : <span className='sidebar-tab-favicon placeholder' aria-hidden='true'>{tabFavicon(tab.url)}</span>}
-                      <span className='sidebar-tab-text'>
-                        <span className='sidebar-tab-title'>{tab.title || 'New Tab'}</span>
-                        <span className='sidebar-tab-url'>{tab.url || 'about:blank'}</span>
-                      </span>
-                    </div>
-                    <ToolbarButton
-                      className='sidebar-tab-close'
-                      icon='close'
-                      title='Close tab'
-                      onClick={e => {
-                        e.stopPropagation();
-                        onCloseTab(tab);
-                      }}
-                    />
-                  </div>)}
-                </div>
-              </div>;
-            })}
-          </div>
+                </header>
+                {row.tabs === undefined
+                  ? <p className='sidebar-tabs-loading' role='status' aria-live='polite'>Loading tabs...</p>
+                  : <TabListView
+                    name={`sidebar-tabs-${rowKey}`}
+                    ariaLabel={`${session.title} tabs`}
+                    items={row.tabs}
+                    id={tab => tab.page}
+                    selectedItem={activeTab}
+                    onSelected={tab => model.selectTab(tab)}
+                    noItemsMessage='No tabs open.'
+                    render={tab => <TabRow tab={tab} model={model} />}
+                  />}
+              </section>;
+            });
+          })}
         </section>;
       })}
     </div>

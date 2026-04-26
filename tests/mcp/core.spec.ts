@@ -81,7 +81,7 @@ test('browser_navigate can navigate to file:// URLs allowUnrestrictedFileAccess 
     name: 'browser_navigate',
     arguments: { url },
   })).toHaveResponse({
-    page: `- Page URL: ${url}`,
+    page: expect.stringContaining(`- Page URL: ${url}`),
     snapshot: `- generic [ref=e2]: Test file content`,
   });
 });
@@ -273,6 +273,31 @@ test('snapshot depth', async ({ client, server }) => {
   - listitem [ref=e3]: text
   - listitem [ref=e4]:
     - button "Button" [ref=e5]`,
+  });
+});
+
+test('snapshot with boxes', async ({ client, server }) => {
+  server.setContent('/', `
+    <style>body { margin: 0; }</style>
+    <button style="position:absolute;left:100px;top:50px;width:80px;height:40px;margin:0;padding:0;border:0;">click</button>
+  `, 'text/html');
+
+  await client.callTool({
+    name: 'browser_navigate',
+    arguments: { url: server.PREFIX },
+  });
+
+  expect(await client.callTool({
+    name: 'browser_snapshot',
+    arguments: { boxes: true },
+  })).toHaveResponse({
+    inlineSnapshot: expect.stringContaining(`- button "click" [ref=e1] [box=100,50,80,40]`),
+  });
+
+  expect(await client.callTool({
+    name: 'browser_snapshot',
+  })).toHaveResponse({
+    inlineSnapshot: expect.not.stringMatching(/\[box=/),
   });
 });
 

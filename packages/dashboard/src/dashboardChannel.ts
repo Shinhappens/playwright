@@ -15,7 +15,9 @@
  */
 
 import type { ClientInfo } from '../../playwright-core/src/tools/cli-client/registry';
-import type { SessionStatus } from './sessionModel';
+import type { BrowserDescriptor } from '../../playwright-core/src/serverRegistry';
+
+export type SessionStatus = BrowserDescriptor;
 
 export type Tab = {
   browser: string;
@@ -34,17 +36,16 @@ export type DashboardChannelEvents = {
   sessions: { sessions: SessionStatus[]; clientInfo: ClientInfo };
   tabs: { tabs: Tab[] };
   frame: { data: string; viewportWidth: number; viewportHeight: number };
-  elementPicked: { selector: string; ariaSnapshot?: string };
-  pickLocator: {};
   annotate: {};
+  cancelAnnotate: {};
 };
 
 export type MouseButton = 'left' | 'middle' | 'right';
 
 export interface DashboardChannel {
-  selectTab(params: { browser: string; page: string }): Promise<void>;
-  closeTab(params: { browser: string; page: string }): Promise<void>;
-  newTab(params: { browser: string }): Promise<void>;
+  selectTab(params: { browser: string; context: string; page: string }): Promise<void>;
+  closeTab(params: { browser: string; context: string; page: string }): Promise<void>;
+  newTab(params: { browser: string; context: string }): Promise<void>;
   closeSession(params: { browser: string }): Promise<void>;
   deleteSessionData(params: { browser: string }): Promise<void>;
   setVisible(params: { visible: boolean }): Promise<void>;
@@ -60,13 +61,11 @@ export interface DashboardChannel {
   wheel(params: { deltaX: number; deltaY: number }): Promise<void>;
   keydown(params: { key: string }): Promise<void>;
   keyup(params: { key: string }): Promise<void>;
-  pickLocator(): Promise<void>;
-  cancelPickLocator(): Promise<void>;
   startRecording(): Promise<void>;
   stopRecording(): Promise<{ streamId: string }>;
   readStream(params: { streamId: string }): Promise<{ data: string; eof: boolean }>;
-  screenshot(): Promise<string>;
-  submitAnnotation(params: { data: string; annotations: AnnotationData[] }): Promise<void>;
+  screenshot(): Promise<{ data: string; viewportWidth: number; viewportHeight: number }>;
+  submitAnnotation(params: { data: string | undefined; annotations: AnnotationData[] }): Promise<void>;
 
   on<K extends keyof DashboardChannelEvents>(event: K, listener: (params: DashboardChannelEvents[K]) => void): void;
   off<K extends keyof DashboardChannelEvents>(event: K, listener: (params: DashboardChannelEvents[K]) => void): void;

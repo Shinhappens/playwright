@@ -14,43 +14,49 @@
  * limitations under the License.
  */
 
-import { RelayConnection, debugLog } from './relayConnection';
+import { debugLog } from './relayConnection';
+import { PendingConnections } from './pendingConnection';
+import { ConnectedTabGroup, cleanupStalePlaywrightGroups, isNonDebuggableUrl } from './connectedTabGroup';
 
 type PageMessage = {
-  type: 'connectToMCPRelay';
+  type: 'connectionRequested';
   mcpRelayUrl: string;
   protocolVersion: number;
 } | {
   type: 'getTabs';
 } | {
   type: 'connectToTab';
-  tabId?: number;
-  windowId?: number;
-  mcpRelayUrl: string;
+  // Picked in the connect page; absent on the token-bypass path where no tab
+  // selection happens.
+  tab?: chrome.tabs.Tab;
+  clientName?: string;
 } | {
   type: 'getConnectionStatus';
 } | {
   type: 'disconnect';
+} | {
+  type: 'keepalive';
 };
 
-class TabShareExtension {
-  private _activeConnection: RelayConnection | undefined;
-  private _connectedTabIds: Set<number> = new Set();
-  private _groupId: number | null = null;
-  private _pendingTabSelection = new Map<number, RelayConnection>();
+class PlaywrightExtension {
+  private _activeGroup: ConnectedTabGroup | undefined;
+  private _activeClientName: string | undefined;
+  private _pendingConnections = new PendingConnections();
+  // Service worker restarts lose all connection state, so any existing
+  // Playwright groups are stale. Connections wait on this before reconciling.
+  private _cleanupPromise: Promise<void>;
 
   constructor() {
-    chrome.tabs.onRemoved.addListener(this._onTabRemoved.bind(this));
-    chrome.tabs.onUpdated.addListener(this._onTabUpdated.bind(this));
     chrome.runtime.onMessage.addListener(this._onMessage.bind(this));
     chrome.action.onClicked.addListener(this._onActionClicked.bind(this));
+    this._cleanupPromise = cleanupStalePlaywrightGroups();
   }
 
   // Promise-based message handling is not supported in Chrome: https://issues.chromium.org/issues/40753031
   private _onMessage(message: PageMessage, sender: chrome.runtime.MessageSender, sendResponse: (response: any) => void) {
     switch (message.type) {
-      case 'connectToMCPRelay':
-        this._connectToRelay(sender.tab!.id!, message.mcpRelayUrl, message.protocolVersion).then(
+      case 'connectionRequested':
+        this._pendingConnections.create(sender.tab!.id!, message.mcpRelayUrl, message.protocolVersion).then(
             () => sendResponse({ success: true }),
             (error: any) => sendResponse({ success: false, error: error.message }));
         return true;
@@ -59,166 +65,73 @@ class TabShareExtension {
             tabs => sendResponse({ success: true, tabs, currentTabId: sender.tab?.id }),
             (error: any) => sendResponse({ success: false, error: error.message }));
         return true;
-      case 'connectToTab':
-        const tabId = message.tabId || sender.tab?.id!;
-        const windowId = message.windowId || sender.tab?.windowId!;
-        this._connectTab(sender.tab!.id!, tabId, windowId, message.mcpRelayUrl!).then(
+      case 'connectToTab': {
+        // Token-bypass (no specific pick) falls back to the connect page itself
+        // so `ConnectedTabGroup` always has a concrete tab to start from. Both
+        // sender.tab and UI-supplied tabs come from chrome.tabs.query / runtime
+        // message sender, where `id` is always defined.
+        const selectedTab = (message.tab ?? sender.tab!) as chrome.tabs.Tab & { id: number };
+        this._connectTab(sender.tab!.id!, selectedTab, message.clientName).then(
             () => sendResponse({ success: true }),
             (error: any) => sendResponse({ success: false, error: error.message }));
         return true; // Return true to indicate that the response will be sent asynchronously
+      }
       case 'getConnectionStatus':
         sendResponse({
-          connectedTabIds: [...this._connectedTabIds]
+          connectedTabIds: this._activeGroup?.connectedTabIds() ?? [],
+          clientName: this._activeClientName,
         });
         return false;
       case 'disconnect':
-        this._disconnect().then(
-            () => sendResponse({ success: true }),
-            (error: any) => sendResponse({ success: false, error: error.message }));
+        try {
+          this._disconnect('User disconnected');
+          sendResponse({ success: true });
+        } catch (error: any) {
+          sendResponse({ success: false, error: error.message });
+        }
         return true;
+      case 'keepalive':
+        // Connect page pings us every ~20s so receiving this message resets
+        // the MV3 service worker idle timer and keeps the relay WebSocket alive.
+        return false;
     }
-    return false;
   }
 
-  private async _connectToRelay(selectorTabId: number, mcpRelayUrl: string, protocolVersion: number): Promise<void> {
+  private async _connectTab(selectorTabId: number, tab: chrome.tabs.Tab & { id: number }, clientName: string | undefined): Promise<void> {
     try {
-      debugLog(`Connecting to relay at ${mcpRelayUrl} (protocol v${protocolVersion})`);
-      const socket = new WebSocket(mcpRelayUrl);
-      await new Promise<void>((resolve, reject) => {
-        socket.onopen = () => resolve();
-        socket.onerror = () => reject(new Error('WebSocket error'));
-        setTimeout(() => reject(new Error('Connection timeout')), 5000);
-      });
+      await this._cleanupPromise;
+      this._disconnect('Another connection is requested');
 
-      const connection = new RelayConnection(socket, protocolVersion);
-      connection.onclose = () => {
-        debugLog('Pending connection closed');
-        const existed = this._pendingTabSelection.delete(selectorTabId);
-        if (existed) {
-          chrome.tabs.sendMessage(selectorTabId, { type: 'pendingConnectionClosed' }).catch(() => {});
-          chrome.tabs.ungroup(selectorTabId).catch(() => {});
+      const connection = await this._pendingConnections.take(selectorTabId);
+      if (!connection)
+        throw new Error('Pending client connection closed');
+
+      const group = new ConnectedTabGroup(connection, tab);
+      group.onclose = () => {
+        if (this._activeGroup === group) {
+          this._activeGroup = undefined;
+          this._activeClientName = undefined;
         }
       };
-      this._pendingTabSelection.set(selectorTabId, connection);
-      await this._addTabToGroup(selectorTabId);
-      debugLog(`Connected to MCP relay`);
-    } catch (error: any) {
-      const message = `Failed to connect to MCP relay: ${error.message}`;
-      debugLog(message);
-      throw new Error(message);
-    }
-  }
-
-  private async _connectTab(selectorTabId: number, tabId: number, windowId: number, mcpRelayUrl: string): Promise<void> {
-    try {
-      debugLog(`Connecting tab ${tabId} to relay at ${mcpRelayUrl}`);
-      try {
-        this._activeConnection?.close('Another connection is requested');
-      } catch (error: any) {
-        debugLog(`Error closing active connection:`, error);
-      }
-      await Promise.all([...this._connectedTabIds].map(id => this._updateBadge(id, { text: '' })));
-      this._connectedTabIds.clear();
-
-      this._activeConnection = this._pendingTabSelection.get(selectorTabId);
-      if (!this._activeConnection)
-        throw new Error('Pending client connection closed');
-      this._pendingTabSelection.delete(selectorTabId);
-
-      this._activeConnection.setSelectedTab(tabId);
-      this._activeConnection.onclose = () => {
-        debugLog('MCP connection closed');
-        this._activeConnection = undefined;
-        const allTabIds = [...this._connectedTabIds];
-        this._connectedTabIds.clear();
-        allTabIds.map(id => this._updateBadge(id, { text: '' }));
-        chrome.tabs.ungroup(allTabIds).catch(() => {});
-      };
-      this._activeConnection.ontabattached = (newTabId: number) => {
-        this._connectedTabIds.add(newTabId);
-        void this._updateBadge(newTabId, { text: '✓', color: '#4CAF50', title: 'Connected to Playwright client' });
-        void this._addTabToGroup(newTabId);
-      };
-      this._activeConnection.ontabdetached = (removedTabId: number) => {
-        this._connectedTabIds.delete(removedTabId);
-        void this._updateBadge(removedTabId, { text: '' });
-        chrome.tabs.ungroup(removedTabId).catch(() => {});
-      };
+      this._activeGroup = group;
+      this._activeClientName = clientName;
 
       await Promise.all([
-        chrome.tabs.update(tabId, { active: true }),
-        chrome.windows.update(windowId, { focused: true }),
-      ]);
-      debugLog(`Connected to Playwright client`);
+        chrome.tabs.update(tab.id, { active: true }),
+        chrome.windows.update(tab.windowId, { focused: true }),
+      ]).catch(() => {});
+
+      if (tab.id !== selectorTabId)
+        await chrome.tabs.remove(selectorTabId).catch(() => {});
     } catch (error: any) {
-      this._connectedTabIds.clear();
-      debugLog(`Failed to connect tab ${tabId}:`, error.message);
+      debugLog(`Failed to connect tab ${tab.id}:`, error.message);
       throw error;
     }
   }
 
-  private async _updateBadge(tabId: number, { text, color, title }: { text: string; color?: string, title?: string }): Promise<void> {
-    try {
-      await chrome.action.setBadgeText({ tabId, text });
-      await chrome.action.setTitle({ tabId, title: title || '' });
-      if (color)
-        await chrome.action.setBadgeBackgroundColor({ tabId, color });
-    } catch (error: any) {
-      // Ignore errors as the tab may be closed already.
-    }
-  }
-
-  private async _onTabRemoved(tabId: number): Promise<void> {
-    const pendingConnection = this._pendingTabSelection.get(tabId);
-    if (pendingConnection) {
-      this._pendingTabSelection.delete(tabId);
-      pendingConnection.close('Browser tab closed');
-      return;
-    }
-    // Tab removal is handled by RelayConnection (ontabdetached / onclose).
-    // No action needed here — the relay detects it via chrome.tabs.onRemoved
-    // and chrome.debugger.onDetach listeners.
-  }
-
-  private _onTabUpdated(tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) {
-    if (this._connectedTabIds.has(tabId))
-      void this._updateBadge(tabId, { text: '✓', color: '#4CAF50', title: 'Connected to MCP client' });
-
-    if (!this._activeConnection || changeInfo.groupId === undefined)
-      return;
-    // Ignore the extension's own UI tabs (connect/status pages) — those get added
-    // to the group for visual grouping, not because they should be controlled.
-    if (tab.url?.startsWith(chrome.runtime.getURL('')))
-      return;
-    const inOurGroup = this._groupId !== null && changeInfo.groupId === this._groupId;
-    const isConnected = this._connectedTabIds.has(tabId);
-    if (inOurGroup && !isConnected)
-      void this._activeConnection.attachTab(tabId);
-    else if (!inOurGroup && isConnected)
-      void this._activeConnection.detachTab(tabId);
-  }
-
   private async _getTabs(): Promise<chrome.tabs.Tab[]> {
     const tabs = await chrome.tabs.query({});
-    return tabs.filter(tab => tab.url && !['chrome:', 'edge:', 'devtools:'].some(scheme => tab.url!.startsWith(scheme)));
-  }
-
-  private async _addTabToGroup(tabId: number): Promise<void> {
-    try {
-      if (this._groupId !== null) {
-        try {
-          await chrome.tabs.group({ groupId: this._groupId, tabIds: [tabId] });
-          await chrome.tabGroups.update(this._groupId, { color: 'green', title: 'Playwright' });
-          return;
-        } catch {
-          this._groupId = null;
-        }
-      }
-      this._groupId = await chrome.tabs.group({ tabIds: [tabId] });
-      await chrome.tabGroups.update(this._groupId, { color: 'green', title: 'Playwright' });
-    } catch (error: any) {
-      debugLog('Error adding tab to group:', error);
-    }
+    return tabs.filter(tab => !isNonDebuggableUrl(tab.url));
   }
 
   private async _onActionClicked(): Promise<void> {
@@ -228,12 +141,13 @@ class TabShareExtension {
     });
   }
 
-  private async _disconnect(): Promise<void> {
-    this._activeConnection?.close('User disconnected');
-    this._activeConnection = undefined;
-    await Promise.all([...this._connectedTabIds].map(id => this._updateBadge(id, { text: '' })));
-    this._connectedTabIds.clear();
+  // Closes the active group's connection if any. ConnectedTabGroup's onclose
+  // handles state cleanup (connectedTabIds, badges, reconcile).
+  private _disconnect(reason: string) {
+    this._activeGroup?.close(reason);
+    this._activeGroup = undefined;
+    this._activeClientName = undefined;
   }
 }
 
-new TabShareExtension();
+new PlaywrightExtension();

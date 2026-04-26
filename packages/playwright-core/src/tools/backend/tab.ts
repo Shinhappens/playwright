@@ -20,14 +20,14 @@ import { asLocator } from '@isomorphic/locatorGenerators';
 import { locatorOrSelectorAsSelector } from '@isomorphic/locatorParser';
 import { ManualPromise } from '@isomorphic/manualPromise';
 import { eventsHelper } from '@utils/eventsHelper';
-import { disposeAll } from '@utils/disposable';
+import { disposeAll } from '@isomorphic/disposable';
 import { waitForCompletion, eventWaiter } from './utils';
 import { LogFile } from './logFile';
 import { ModalState } from './tool';
 import { handleDialog } from './dialogs';
 import { uploadFile } from './files';
 
-import type { Disposable } from '@utils/disposable';
+import type { Disposable } from '@isomorphic/disposable';
 import type { Context, ContextConfig } from './context';
 import type * as playwright from '../../..';
 
@@ -383,13 +383,13 @@ export class Tab extends EventEmitter<TabEventsInterface> {
     this._requests.length = 0;
   }
 
-  async captureSnapshot(root: playwright.Locator | undefined, depth: number | undefined, relativeTo: string | undefined): Promise<TabSnapshot> {
+  async captureSnapshot(root: playwright.Locator | undefined, depth: number | undefined, boxes: boolean | undefined, relativeTo: string | undefined): Promise<TabSnapshot> {
     await this._initializedPromise;
     let tabSnapshot: TabSnapshot | undefined;
     const modalStates = await this._raceAgainstModalStates(async () => {
       const ariaSnapshot = root
-        ? await root.ariaSnapshot({ mode: 'ai', depth })
-        : await this.page.ariaSnapshot({ mode: 'ai', depth });
+        ? await root.ariaSnapshot({ mode: 'ai', depth, boxes })
+        : await this.page.ariaSnapshot({ mode: 'ai', depth, boxes });
       tabSnapshot = {
         ariaSnapshot,
         modalStates: [],

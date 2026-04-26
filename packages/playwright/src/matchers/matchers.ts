@@ -33,25 +33,25 @@ import { toHaveScreenshotStepTitle } from './toMatchSnapshot';
 import { expectConfig } from './expect';
 
 import type { ExpectMatcherState } from '../../types/test';
-import type { ExpectStepInfo, ExpectTestInfo } from './expect';
+import type { ExpectTestInfo } from './expect';
 import type { InternalMatcherUtils } from './matcherHint';
 import type { APIResponse, Locator, Frame, Page } from 'playwright-core';
+import type { ExpectResult } from 'playwright-core/lib/client/frame';
 import type { FrameExpectParams } from 'playwright-core/lib/client/types';
 import type { ExpectMatcherUtils } from '../../types/test';
 import type { URLPattern } from '@isomorphic/urlMatch';
 
 export type ExpectMatcherStateInternal = Omit<ExpectMatcherState, 'utils'> & {
-  _stepInfo?: ExpectStepInfo;
   utils: ExpectMatcherUtils & InternalMatcherUtils;
 };
 
 export interface LocatorEx extends Locator {
   _selector: string;
-  _expect(expression: string, options: FrameExpectParams): Promise<{ matches: boolean, received?: any, log?: string[], timedOut?: boolean, errorMessage?: string }>;
+  _expect(expression: string, options: FrameExpectParams): Promise<ExpectResult>;
 }
 
 export interface FrameEx extends Frame {
-  _expect(expression: string, options: FrameExpectParams): Promise<{ matches: boolean, received?: any, log?: string[], timedOut?: boolean, errorMessage?: string }>;
+  _expect(expression: string, options: FrameExpectParams): Promise<ExpectResult>;
 }
 
 interface APIResponseEx extends APIResponse {

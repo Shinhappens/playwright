@@ -1126,11 +1126,13 @@ export type BrowserTypeConnectOverCDPParams = {
   slowMo?: number,
   timeout: number,
   isLocal?: boolean,
+  noDefaults?: boolean,
 };
 export type BrowserTypeConnectOverCDPOptions = {
   headers?: NameValue[],
   slowMo?: number,
   isLocal?: boolean,
+  noDefaults?: boolean,
 };
 export type BrowserTypeConnectOverCDPResult = {
   browser: BrowserChannel,
@@ -1640,7 +1642,6 @@ export type BrowserContextInitializer = {
 };
 export interface BrowserContextEventTarget {
   on(event: 'bindingCall', callback: (params: BrowserContextBindingCallEvent) => void): this;
-  on(event: 'pickLocator', callback: (params: BrowserContextPickLocatorEvent) => void): this;
   on(event: 'console', callback: (params: BrowserContextConsoleEvent) => void): this;
   on(event: 'close', callback: (params: BrowserContextCloseEvent) => void): this;
   on(event: 'dialog', callback: (params: BrowserContextDialogEvent) => void): this;
@@ -1693,9 +1694,6 @@ export interface BrowserContextChannel extends BrowserContextEventTarget, EventT
 }
 export type BrowserContextBindingCallEvent = {
   binding: BindingCallChannel,
-};
-export type BrowserContextPickLocatorEvent = {
-  page: PageChannel,
 };
 export type BrowserContextConsoleEvent = {
   type: string,
@@ -2072,7 +2070,6 @@ export type BrowserContextClockSetSystemTimeResult = void;
 
 export interface BrowserContextEvents {
   'bindingCall': BrowserContextBindingCallEvent;
-  'pickLocator': BrowserContextPickLocatorEvent;
   'console': BrowserContextConsoleEvent;
   'close': BrowserContextCloseEvent;
   'dialog': BrowserContextDialogEvent;
@@ -2930,6 +2927,7 @@ export type FrameAriaSnapshotParams = {
   track?: string,
   selector?: string,
   depth?: number,
+  boxes?: boolean,
   timeout: number,
 };
 export type FrameAriaSnapshotOptions = {
@@ -2937,6 +2935,7 @@ export type FrameAriaSnapshotOptions = {
   track?: string,
   selector?: string,
   depth?: number,
+  boxes?: boolean,
 };
 export type FrameAriaSnapshotResult = {
   snapshot: string,
@@ -3519,7 +3518,10 @@ export type FrameExpectOptions = {
 };
 export type FrameExpectResult = {
   matches: boolean,
-  received?: SerializedValue,
+  received?: {
+    value?: SerializedValue,
+    ariaSnapshot?: string,
+  },
   timedOut?: boolean,
   errorMessage?: string,
   log?: string[],
@@ -4200,6 +4202,7 @@ export interface RouteEvents {
 // ----------- WebSocketRoute -----------
 export type WebSocketRouteInitializer = {
   url: string,
+  protocols: string[],
 };
 export interface WebSocketRouteEventTarget {
   on(event: 'messageFromPage', callback: (params: WebSocketRouteMessageFromPageEvent) => void): this;

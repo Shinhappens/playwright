@@ -80,6 +80,15 @@ const close = declareCommand({
   toolParams: () => ({}),
 });
 
+const detach = declareCommand({
+  name: 'detach',
+  description: 'Detach from an attached browser',
+  category: 'core',
+  args: z.object({}),
+  toolName: '',
+  toolParams: () => ({}),
+});
+
 const goto = declareCommand({
   name: 'goto',
   description: 'Navigate to a URL',
@@ -259,6 +268,33 @@ const drag = declareCommand({
   toolParams: ({ startTarget, endTarget }) => ({ startTarget, endTarget }),
 });
 
+const drop = declareCommand({
+  name: 'drop',
+  description: 'Drop files or data onto an element',
+  category: 'core',
+  args: z.object({
+    target: z.string().describe(elementTargetDescription),
+  }),
+  options: z.object({
+    path: z.union([z.string(), z.array(z.string())]).optional().transform(v => v ? (Array.isArray(v) ? v : [v]) : undefined).describe('Absolute path to a file to drop onto the element (repeatable)'),
+    data: z.union([z.string(), z.array(z.string())]).optional().transform(v => v ? (Array.isArray(v) ? v : [v]) : undefined).describe('Data to drop in "mime/type=value" format, e.g. --data "text/plain=hello" (repeatable)'),
+  }),
+  toolName: 'browser_drop',
+  toolParams: ({ target, path, data }) => {
+    let dataMap: Record<string, string> | undefined;
+    if (data) {
+      dataMap = {};
+      for (const entry of data) {
+        const idx = entry.indexOf('=');
+        if (idx === -1)
+          throw new Error(`--data must be in "mime/type=value" format, got: ${entry}`);
+        dataMap[entry.slice(0, idx)] = entry.slice(idx + 1);
+      }
+    }
+    return { target, paths: path, data: dataMap };
+  },
+});
+
 const fill = declareCommand({
   name: 'fill',
   description: 'Fill text into editable element',
@@ -340,18 +376,21 @@ const snapshot = declareCommand({
   options: z.object({
     filename: z.string().optional().describe('Save snapshot to markdown file instead of returning it in the response.'),
     depth: numberArg.optional().describe('Limit snapshot depth, unlimited by default.'),
+    boxes: z.boolean().optional().describe('Include each element\'s bounding box as [box=x,y,width,height] in the snapshot.'),
   }),
   toolName: 'browser_snapshot',
-  toolParams: ({ filename, target, depth }) => ({ filename, target, depth }),
+  toolParams: ({ filename, target, depth, boxes }) => ({ filename, target, depth, boxes }),
 });
 
-const pick = declareCommand({
-  name: 'pick',
-  description: 'Wait for the user to pick an element in the browser and print its ref and locator',
+const generateLocator = declareCommand({
+  name: 'generate-locator',
+  description: 'Generate a Playwright locator for the given element',
   category: 'devtools',
-  args: z.object({}),
-  toolName: 'browser_pick_locator',
-  toolParams: () => ({}),
+  args: z.object({
+    target: z.string().describe(elementTargetDescription),
+  }),
+  toolName: 'browser_generate_locator',
+  toolParams: ({ target }) => ({ target }),
 });
 
 const highlight = declareCommand({
@@ -849,15 +888,16 @@ const videoChapter = declareCommand({
   toolParams: ({ title, description, duration }) => ({ title, description, duration }),
 });
 
-const devtoolsShow = declareCommand({
+const dashboardShow = declareCommand({
   name: 'show',
-  description: 'Show browser DevTools',
+  description: 'Show Playwright Dashboard',
   category: 'devtools',
   args: z.object({}),
   options: z.object({
     port: numberArg.optional().describe('Start as a blocking HTTP server on this port (use 0 for a random port)'),
     host: z.string().optional().describe('Host to bind to when using --port (defaults to localhost)'),
     annotate: z.boolean().optional().describe('Switch the dashboard into annotation mode.'),
+    kill: z.boolean().optional().describe('Kill the dashboard daemon.'),
   }),
   toolName: '',
   toolParams: () => ({}),
@@ -984,12 +1024,14 @@ const commandsArray: AnyCommandSchema[] = [
   open,
   attach,
   close,
+  detach,
   goto,
   type,
   click,
   doubleClick,
   fill,
   drag,
+  drop,
   hover,
   select,
   fileUpload,
@@ -1069,11 +1111,11 @@ const commandsArray: AnyCommandSchema[] = [
   videoStart,
   videoStop,
   videoChapter,
-  devtoolsShow,
+  dashboardShow,
   pauseAt,
   resume,
   stepOver,
-  pick,
+  generateLocator,
   highlight,
 
   // session category
