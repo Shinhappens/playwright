@@ -27,7 +27,7 @@ export type RecordingState =
   | { phase: 'recording' }
   | { phase: 'stopped'; blob: Blob; blobUrl: string };
 
-export type AnnotateFrame = { data: string; viewportWidth: number; viewportHeight: number };
+export type AnnotateFrame = { data: string; viewportWidth: number; viewportHeight: number; ariaSnapshot: string };
 
 export type DashboardState = {
   // Session model state.
@@ -90,10 +90,6 @@ export class DashboardModel {
 
   closeSession(descriptor: BrowserDescriptor) {
     void this._client.closeSession({ browser: descriptor.browser.guid });
-  }
-
-  deleteSessionData(descriptor: BrowserDescriptor) {
-    void this._client.deleteSessionData({ browser: descriptor.browser.guid });
   }
 
   setVisible(visible: boolean) {
@@ -208,6 +204,7 @@ export class DashboardModel {
   async submitAnnotation(data: string | undefined, annotations: Annotation[]) {
     await this._client.submitAnnotation({
       data,
+      ariaSnapshot: this.state.annotateFrame?.ariaSnapshot ?? '',
       annotations: annotations.map(a => ({ x: a.x, y: a.y, width: a.width, height: a.height, text: a.text })),
     });
     this.cancelAnnotate();

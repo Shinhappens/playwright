@@ -47,6 +47,7 @@ import type { Download } from '../../download';
 import type { APIRequestContext } from '../../fetch';
 import type { HarTracerDelegate } from '../../har/harTracer';
 import type { CallMetadata, InstrumentationListener } from '../../instrumentation';
+import type { PageError } from '../../page';
 import type { RecordHarOptions, StackFrame, TracingTracingStopChunkParams } from '@protocol/channels';
 import type * as har from '@trace/har';
 import type { FrameSnapshot } from '@trace/snapshot';
@@ -358,16 +359,15 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
   harStart(page: Page | null, options: RecordHarOptions): string {
     const harId = createGuid();
     const artifactsDir = this._context instanceof BrowserContext ? this._context._browser.options.artifactsDir : this._createTracesDirIfNeeded();
-    const harFilePath = path.join(artifactsDir, `${harId}.har`);
-    this.harRecorders.set(harId, new HarRecorder(this._context, harFilePath, page, options));
+    this.harRecorders.set(harId, new HarRecorder(this._context, artifactsDir, harId, page, options));
     return harId;
   }
 
-  async harExport(progress: Progress, harId: string | undefined): Promise<Artifact> {
+  async harExport(progress: Progress, harId: string | undefined, mode: 'archive' | 'entries'): Promise<{ artifact?: Artifact, entries?: NameValue[] }> {
     const recorder = this.harRecorders.get(harId || '')!;
-    const artifact = await progress.race(recorder.export());
+    const result = await progress.race(recorder.export(mode));
     this.harRecorders.delete(harId || '');
-    return artifact;
+    return result;
   }
 
   private _closeAllGroups() {
@@ -632,13 +632,20 @@ export class Tracing extends SdkObject implements InstrumentationListener, Snaps
     this._started = false;
   }
 
-  private _onPageError(error: Error, page: Page) {
+  private _onPageError(pageError: PageError, page: Page) {
     const event: trace.EventTraceEvent = {
       type: 'event',
       time: monotonicTime(),
       class: 'BrowserContext',
       method: 'pageError',
-      params: { error: serializeError(error) },
+      params: {
+        error: serializeError(pageError.error),
+        location: {
+          url: pageError.location.url,
+          line: pageError.location.lineNumber,
+          column: pageError.location.columnNumber,
+        },
+      },
       pageId: page.guid,
     };
     this._appendTraceEvent(event);

@@ -22,7 +22,7 @@ import { Serializable, EvaluationArgument, PageFunction, PageFunctionOn, SmartHa
 
 // Use the global URLPattern type if available (Node.js 22+, modern browsers),
 // otherwise fall back to `never` so it disappears from union types.
-type URLPattern = typeof globalThis extends { URLPattern: infer T } ? T : never;
+type URLPattern = typeof globalThis extends { URLPattern: new (...args: any) => infer T } ? T : never;
 
 type PageWaitForSelectorOptionsNotHidden = PageWaitForSelectorOptions & {
   state?: 'visible'|'attached';
@@ -10827,19 +10827,6 @@ export interface Worker {
    */
   prependListener(event: 'console', listener: (consoleMessage: ConsoleMessage) => any): this;
 
-  /**
-   * Disconnects from a worker that was connected through
-   * [browserType.connectToWorker(endpoint[, options])](https://playwright.dev/docs/api/class-browsertype#browser-type-connect-to-worker).
-   * Calling this method on any other worker will throw.
-   * @param options
-   */
-  disconnect(options?: {
-    /**
-     * The reason to be reported to the operations interrupted by the worker disconnect.
-     */
-    reason?: string;
-  }): Promise<void>;
-
   url(): string;
 
   /**
@@ -15417,31 +15404,6 @@ export interface BrowserType<Unused = {}> {
    */
   connect(options: ConnectOptions & { wsEndpoint?: string }): Promise<Browser>;
   /**
-   * This method attaches Playwright to an existing JavaScript engine exposing Chrome DevTools Protocol, for example to
-   * a Node.js process or an Electron application.
-   *
-   * **NOTE** This is only supported on `chromium`.
-   *
-   * **Usage**
-   *
-   * ```js
-   * const worker = await playwright.chromium.connectToWorker('http://localhost:9229');
-   * const global = await worker.evaluate(() => globalThis);
-   * ```
-   *
-   * @param endpoint A CDP websocket endpoint or http url to connect to. For example `http://localhost:9229/` or
-   * `ws://127.0.0.1:9229/something`.
-   * @param options
-   */
-  connectToWorker(endpoint: string, options?: {
-    /**
-     * Maximum time in milliseconds to wait for the connection to be established. Defaults to `30000` (30 seconds). Pass
-     * `0` to disable timeout.
-     */
-    timeout?: number;
-  }): Promise<Worker>;
-
-  /**
    * A path where Playwright expects to find a bundled browser executable.
    */
   executablePath(): string;
@@ -16040,6 +16002,26 @@ export interface BrowserType<Unused = {}> {
    */
   launchServer(options?: {
     /**
+     * This option allows the connecting client to expose its local network to the browser via
+     * [`exposeNetwork`](https://playwright.dev/docs/api/class-browsertype#browser-type-connect-option-expose-network).
+     * The value is the maximum set of network rules the server will accept; the client must request a subset of these
+     * rules through `exposeNetwork`, otherwise its requests will be served directly from the server. Consists of a list
+     * of rules separated by comma.
+     *
+     * Available rules:
+     * 1. Hostname pattern, for example: `example.com`, `*.org:99`, `x.*.y.com`, `*foo.org`.
+     * 1. IP literal, for example: `127.0.0.1`, `0.0.0.0:99`, `[::1]`, `[0:0::1]:99`.
+     * 1. `<loopback>` that matches local loopback interfaces: `localhost`, `*.localhost`, `127.0.0.1`, `[::1]`.
+     *
+     * Some common examples:
+     * 1. `"*"` to allow exposing any network.
+     * 1. `"<loopback>"` to allow exposing localhost network.
+     * 1. `"*.test.internal-domain,*.staging.internal-domain,<loopback>"` to allow exposing test/staging deployments
+     *    and localhost.
+     */
+    allowClientNetwork?: string;
+
+    /**
      * **NOTE** Use custom browser args at your own risk, as some of them may break Playwright functionality.
      *
      * Additional arguments to pass to the browser instance. The list of Chromium flags can be found
@@ -16118,9 +16100,9 @@ export interface BrowserType<Unused = {}> {
     headless?: boolean;
 
     /**
-     * Host to use for the web socket. It is optional and if it is omitted, the server will accept connections on the
-     * unspecified IPv6 address (::) when IPv6 is available, or the unspecified IPv4 address (0.0.0.0) otherwise. Consider
-     * hardening it with picking a specific interface.
+     * Host to use for the web socket. It is optional and defaults to `localhost`, accepting connections only from the
+     * loopback interface. Pass an explicit address (e.g. `0.0.0.0`) to accept connections from the network — be aware
+     * this exposes the browser RPC to anything that can reach the listening port.
      */
     host?: string;
 
@@ -16858,6 +16840,323 @@ export type AndroidKey =
 
 export const _android: Android;
 
+//@ts-ignore this will be any if electron is not installed
+type ElectronType = typeof import('electron');
+
+/**
+ * Electron application representation. You can use
+ * [electron.launch([options])](https://playwright.dev/docs/api/class-electron#electron-launch) to obtain the
+ * application instance. This instance you can control main electron process as well as work with Electron windows:
+ *
+ * ```js
+ * import { _electron as electron } from 'playwright';
+ *
+ * (async () => {
+ *   // Launch Electron app.
+ *   const electronApp = await electron.launch({ args: ['main.js'] });
+ *
+ *   // Evaluation expression in the Electron context.
+ *   const appPath = await electronApp.evaluate(async ({ app }) => {
+ *     // This runs in the main Electron process, parameter here is always
+ *     // the result of the require('electron') in the main app script.
+ *     return app.getAppPath();
+ *   });
+ *   console.log(appPath);
+ *
+ *   // Get the first window that the app opens, wait if necessary.
+ *   const window = await electronApp.firstWindow();
+ *   // Print the title.
+ *   console.log(await window.title());
+ *   // Capture a screenshot.
+ *   await window.screenshot({ path: 'intro.png' });
+ *   // Direct Electron console to Node terminal.
+ *   window.on('console', console.log);
+ *   // Click button.
+ *   await window.click('text=Click me');
+ *   // Exit app.
+ *   await electronApp.close();
+ * })();
+ * ```
+ *
+ */
+export interface ElectronApplication {
+  /**
+   * Returns the return value of
+   * [`pageFunction`](https://playwright.dev/docs/api/class-electronapplication#electron-application-evaluate-option-expression).
+   *
+   * If the function passed to the
+   * [electronApplication.evaluate(pageFunction[, arg])](https://playwright.dev/docs/api/class-electronapplication#electron-application-evaluate)
+   * returns a [Promise], then
+   * [electronApplication.evaluate(pageFunction[, arg])](https://playwright.dev/docs/api/class-electronapplication#electron-application-evaluate)
+   * would wait for the promise to resolve and return its value.
+   *
+   * If the function passed to the
+   * [electronApplication.evaluate(pageFunction[, arg])](https://playwright.dev/docs/api/class-electronapplication#electron-application-evaluate)
+   * returns a non-[Serializable] value, then
+   * [electronApplication.evaluate(pageFunction[, arg])](https://playwright.dev/docs/api/class-electronapplication#electron-application-evaluate)
+   * returns `undefined`. Playwright also supports transferring some additional values that are not serializable by
+   * `JSON`: `-0`, `NaN`, `Infinity`, `-Infinity`.
+   * @param pageFunction Function to be evaluated in the main Electron process.
+   * @param arg Optional argument to pass to
+   * [`pageFunction`](https://playwright.dev/docs/api/class-electronapplication#electron-application-evaluate-option-expression).
+   */
+  evaluate: JSHandle<ElectronType>['evaluate'];
+  /**
+   * Returns the return value of
+   * [`pageFunction`](https://playwright.dev/docs/api/class-electronapplication#electron-application-evaluate-handle-option-expression)
+   * as a [JSHandle](https://playwright.dev/docs/api/class-jshandle).
+   *
+   * The only difference between
+   * [electronApplication.evaluate(pageFunction[, arg])](https://playwright.dev/docs/api/class-electronapplication#electron-application-evaluate)
+   * and
+   * [electronApplication.evaluateHandle(pageFunction[, arg])](https://playwright.dev/docs/api/class-electronapplication#electron-application-evaluate-handle)
+   * is that
+   * [electronApplication.evaluateHandle(pageFunction[, arg])](https://playwright.dev/docs/api/class-electronapplication#electron-application-evaluate-handle)
+   * returns [JSHandle](https://playwright.dev/docs/api/class-jshandle).
+   *
+   * If the function passed to the
+   * [electronApplication.evaluateHandle(pageFunction[, arg])](https://playwright.dev/docs/api/class-electronapplication#electron-application-evaluate-handle)
+   * returns a [Promise], then
+   * [electronApplication.evaluateHandle(pageFunction[, arg])](https://playwright.dev/docs/api/class-electronapplication#electron-application-evaluate-handle)
+   * would wait for the promise to resolve and return its value.
+   * @param pageFunction Function to be evaluated in the main Electron process.
+   * @param arg Optional argument to pass to
+   * [`pageFunction`](https://playwright.dev/docs/api/class-electronapplication#electron-application-evaluate-handle-option-expression).
+   */
+  evaluateHandle: JSHandle<ElectronType>['evaluateHandle'];
+  /**
+   * This event is issued when the application process has been terminated.
+   */
+  on(event: 'close', listener: () => any): this;
+
+  /**
+   * Emitted when JavaScript within the Electron main process calls one of console API methods, e.g. `console.log` or
+   * `console.dir`.
+   *
+   * The arguments passed into `console.log` are available on the
+   * [ConsoleMessage](https://playwright.dev/docs/api/class-consolemessage) event handler argument.
+   *
+   * **Usage**
+   *
+   * ```js
+   * electronApp.on('console', async msg => {
+   *   const values = [];
+   *   for (const arg of msg.args())
+   *     values.push(await arg.jsonValue());
+   *   console.log(...values);
+   * });
+   * await electronApp.evaluate(() => console.log('hello', 5, { foo: 'bar' }));
+   * ```
+   *
+   */
+  on(event: 'console', listener: (consoleMessage: ConsoleMessage) => any): this;
+
+  /**
+   * This event is issued for every window that is created **and loaded** in Electron. It contains a
+   * [Page](https://playwright.dev/docs/api/class-page) that can be used for Playwright automation.
+   */
+  on(event: 'window', listener: (page: Page) => any): this;
+
+  /**
+   * Adds an event listener that will be automatically removed after it is triggered once. See `addListener` for more information about this event.
+   */
+  once(event: 'close', listener: () => any): this;
+
+  /**
+   * Adds an event listener that will be automatically removed after it is triggered once. See `addListener` for more information about this event.
+   */
+  once(event: 'console', listener: (consoleMessage: ConsoleMessage) => any): this;
+
+  /**
+   * Adds an event listener that will be automatically removed after it is triggered once. See `addListener` for more information about this event.
+   */
+  once(event: 'window', listener: (page: Page) => any): this;
+
+  /**
+   * This event is issued when the application process has been terminated.
+   */
+  addListener(event: 'close', listener: () => any): this;
+
+  /**
+   * Emitted when JavaScript within the Electron main process calls one of console API methods, e.g. `console.log` or
+   * `console.dir`.
+   *
+   * The arguments passed into `console.log` are available on the
+   * [ConsoleMessage](https://playwright.dev/docs/api/class-consolemessage) event handler argument.
+   *
+   * **Usage**
+   *
+   * ```js
+   * electronApp.on('console', async msg => {
+   *   const values = [];
+   *   for (const arg of msg.args())
+   *     values.push(await arg.jsonValue());
+   *   console.log(...values);
+   * });
+   * await electronApp.evaluate(() => console.log('hello', 5, { foo: 'bar' }));
+   * ```
+   *
+   */
+  addListener(event: 'console', listener: (consoleMessage: ConsoleMessage) => any): this;
+
+  /**
+   * This event is issued for every window that is created **and loaded** in Electron. It contains a
+   * [Page](https://playwright.dev/docs/api/class-page) that can be used for Playwright automation.
+   */
+  addListener(event: 'window', listener: (page: Page) => any): this;
+
+  /**
+   * Removes an event listener added by `on` or `addListener`.
+   */
+  removeListener(event: 'close', listener: () => any): this;
+
+  /**
+   * Removes an event listener added by `on` or `addListener`.
+   */
+  removeListener(event: 'console', listener: (consoleMessage: ConsoleMessage) => any): this;
+
+  /**
+   * Removes an event listener added by `on` or `addListener`.
+   */
+  removeListener(event: 'window', listener: (page: Page) => any): this;
+
+  /**
+   * Removes an event listener added by `on` or `addListener`.
+   */
+  off(event: 'close', listener: () => any): this;
+
+  /**
+   * Removes an event listener added by `on` or `addListener`.
+   */
+  off(event: 'console', listener: (consoleMessage: ConsoleMessage) => any): this;
+
+  /**
+   * Removes an event listener added by `on` or `addListener`.
+   */
+  off(event: 'window', listener: (page: Page) => any): this;
+
+  /**
+   * This event is issued when the application process has been terminated.
+   */
+  prependListener(event: 'close', listener: () => any): this;
+
+  /**
+   * Emitted when JavaScript within the Electron main process calls one of console API methods, e.g. `console.log` or
+   * `console.dir`.
+   *
+   * The arguments passed into `console.log` are available on the
+   * [ConsoleMessage](https://playwright.dev/docs/api/class-consolemessage) event handler argument.
+   *
+   * **Usage**
+   *
+   * ```js
+   * electronApp.on('console', async msg => {
+   *   const values = [];
+   *   for (const arg of msg.args())
+   *     values.push(await arg.jsonValue());
+   *   console.log(...values);
+   * });
+   * await electronApp.evaluate(() => console.log('hello', 5, { foo: 'bar' }));
+   * ```
+   *
+   */
+  prependListener(event: 'console', listener: (consoleMessage: ConsoleMessage) => any): this;
+
+  /**
+   * This event is issued for every window that is created **and loaded** in Electron. It contains a
+   * [Page](https://playwright.dev/docs/api/class-page) that can be used for Playwright automation.
+   */
+  prependListener(event: 'window', listener: (page: Page) => any): this;
+
+  /**
+   * Returns the BrowserWindow object that corresponds to the given Playwright page.
+   * @param page Page to retrieve the window for.
+   */
+  browserWindow(page: Page): Promise<JSHandle>;
+
+  /**
+   * Closes Electron application.
+   */
+  close(): Promise<void>;
+
+  /**
+   * This method returns browser context that can be used for setting up context-wide routing, etc.
+   */
+  context(): BrowserContext;
+
+  /**
+   * Convenience method that waits for the first application window to be opened.
+   *
+   * **Usage**
+   *
+   * ```js
+   * const electronApp = await electron.launch({
+   *   args: ['main.js']
+   * });
+   * const window = await electronApp.firstWindow();
+   * // ...
+   * ```
+   *
+   * @param options
+   */
+  firstWindow(options?: {
+    /**
+     * Maximum time to wait for in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The
+     * default value can be changed by using the
+     * [browserContext.setDefaultTimeout(timeout)](https://playwright.dev/docs/api/class-browsercontext#browser-context-set-default-timeout).
+     */
+    timeout?: number;
+  }): Promise<Page>;
+
+  /**
+   * Returns the main process for this Electron Application.
+   */
+  process(): ChildProcess;
+
+  /**
+   * This event is issued when the application process has been terminated.
+   */
+  waitForEvent(event: 'close', optionsOrPredicate?: { predicate?: () => boolean | Promise<boolean>, timeout?: number } | (() => boolean | Promise<boolean>)): Promise<void>;
+
+  /**
+   * Emitted when JavaScript within the Electron main process calls one of console API methods, e.g. `console.log` or
+   * `console.dir`.
+   *
+   * The arguments passed into `console.log` are available on the
+   * [ConsoleMessage](https://playwright.dev/docs/api/class-consolemessage) event handler argument.
+   *
+   * **Usage**
+   *
+   * ```js
+   * electronApp.on('console', async msg => {
+   *   const values = [];
+   *   for (const arg of msg.args())
+   *     values.push(await arg.jsonValue());
+   *   console.log(...values);
+   * });
+   * await electronApp.evaluate(() => console.log('hello', 5, { foo: 'bar' }));
+   * ```
+   *
+   */
+  waitForEvent(event: 'console', optionsOrPredicate?: { predicate?: (consoleMessage: ConsoleMessage) => boolean | Promise<boolean>, timeout?: number } | ((consoleMessage: ConsoleMessage) => boolean | Promise<boolean>)): Promise<ConsoleMessage>;
+
+  /**
+   * This event is issued for every window that is created **and loaded** in Electron. It contains a
+   * [Page](https://playwright.dev/docs/api/class-page) that can be used for Playwright automation.
+   */
+  waitForEvent(event: 'window', optionsOrPredicate?: { predicate?: (page: Page) => boolean | Promise<boolean>, timeout?: number } | ((page: Page) => boolean | Promise<boolean>)): Promise<Page>;
+
+
+  /**
+   * Convenience method that returns all the opened windows.
+   */
+  windows(): Array<Page>;
+
+  [Symbol.asyncDispose](): Promise<void>;
+}
+
+export const _electron: Electron;
+
 // This is required to not export everything by default. See https://github.com/Microsoft/TypeScript/issues/19545#issuecomment-340490459
 export {};
 
@@ -17049,9 +17348,9 @@ export interface Android {
     deviceSerialNumber?: string;
 
     /**
-     * Host to use for the web socket. It is optional and if it is omitted, the server will accept connections on the
-     * unspecified IPv6 address (::) when IPv6 is available, or the unspecified IPv4 address (0.0.0.0) otherwise. Consider
-     * hardening it with picking a specific interface.
+     * Host to use for the web socket. It is optional and defaults to `localhost`, accepting connections only from the
+     * loopback interface. Pass an explicit address (e.g. `0.0.0.0`) to accept connections from the network — be aware
+     * this exposes the device RPC to anything that can reach the listening port.
      */
     host?: string;
 
@@ -19227,9 +19526,6 @@ export interface BrowserServer {
    * Browser websocket endpoint which can be used as an argument to
    * [browserType.connect(endpoint[, options])](https://playwright.dev/docs/api/class-browsertype#browser-type-connect)
    * to establish connection to the browser.
-   *
-   * Note that if the listen `host` option in `launchServer` options is not specified, localhost will be output anyway,
-   * even if the actual listening address is an unspecified address.
    */
   wsEndpoint(): string;
 
@@ -21893,6 +22189,12 @@ export interface Tracing {
     mode?: "full"|"minimal";
 
     /**
+     * Only used together with `content: 'attach'`. When set, response bodies are placed in this directory instead of next
+     * to the HAR file. Not compatible with a `.zip` HAR file.
+     */
+    resourcesDir?: string;
+
+    /**
      * A glob or regex pattern to filter requests that are stored in the HAR. Defaults to none.
      */
     urlFilter?: string|RegExp;
@@ -21981,6 +22283,23 @@ export interface WebError {
    * Unhandled error that was thrown.
    */
   error(): Error;
+
+  location(): {
+    /**
+     * URL of the resource.
+     */
+    url: string;
+
+    /**
+     * 0-based line number in the resource.
+     */
+    line: number;
+
+    /**
+     * 0-based column number in the resource.
+     */
+    column: number;
+  };
 
   /**
    * The page that produced this unhandled exception, if any.
@@ -22236,6 +22555,214 @@ export interface WebSocket {
    */
   waitForEvent(event: 'socketerror', optionsOrPredicate?: { predicate?: (string: string) => boolean | Promise<boolean>, timeout?: number } | ((string: string) => boolean | Promise<boolean>)): Promise<string>;
 
+}
+
+/**
+ * Playwright has **experimental** support for Electron automation, exposed as `_electron`. An example of the Electron
+ * automation script would be:
+ *
+ * ```js
+ * import { _electron as electron } from 'playwright';
+ *
+ * (async () => {
+ *   // Launch Electron app.
+ *   const electronApp = await electron.launch({ args: ['main.js'] });
+ *
+ *   // Evaluation expression in the Electron context.
+ *   const appPath = await electronApp.evaluate(async ({ app }) => {
+ *     // This runs in the main Electron process, parameter here is always
+ *     // the result of the require('electron') in the main app script.
+ *     return app.getAppPath();
+ *   });
+ *   console.log(appPath);
+ *
+ *   // Get the first window that the app opens, wait if necessary.
+ *   const window = await electronApp.firstWindow();
+ *   // Print the title.
+ *   console.log(await window.title());
+ *   // Capture a screenshot.
+ *   await window.screenshot({ path: 'intro.png' });
+ *   // Direct Electron console to Node terminal.
+ *   window.on('console', console.log);
+ *   // Click button.
+ *   await window.click('text=Click me');
+ *   // Exit app.
+ *   await electronApp.close();
+ * })();
+ * ```
+ *
+ * **Supported Electron versions are:**
+ * - v12.2.0+
+ * - v13.4.0+
+ * - v14+
+ *
+ * **Known issues:**
+ *
+ * If you are not able to launch Electron and it will end up in timeouts during launch, try the following:
+ * - Ensure that `nodeCliInspect`
+ *   ([FuseV1Options.EnableNodeCliInspectArguments](https://www.electronjs.org/docs/latest/tutorial/fuses#nodecliinspect))
+ *   fuse is **not** set to `false`.
+ *
+ * **Migrating from v1.59**
+ *
+ * A number of launch options have been removed after v1.59. See below for alternatives.
+ * - `recordHar` - use
+ *   [tracing.startHar(path[, options])](https://playwright.dev/docs/api/class-tracing#tracing-start-har).
+ *
+ *   ```js
+ *   const electronApp = await electron.launch({ args: ['main.js'] });
+ *   await electronApp.context().tracing.startHar('network.har');
+ *   // ... drive the app ...
+ *   await electronApp.context().tracing.stopHar();
+ *   await electronApp.close();
+ *   ```
+ *
+ * - `recordVideo` - use
+ *   [screencast.start([options])](https://playwright.dev/docs/api/class-screencast#screencast-start) on each
+ *   window.
+ *
+ *   ```js
+ *   const electronApp = await electron.launch({ args: ['main.js'] });
+ *   const window = await electronApp.firstWindow();
+ *   await window.screencast.start({ path: 'video.webm' });
+ *   // ... drive the window ...
+ *   await window.screencast.stop();
+ *   await electronApp.close();
+ *   ```
+ *
+ * - `colorScheme` - use
+ *   [page.emulateMedia([options])](https://playwright.dev/docs/api/class-page#page-emulate-media) on each window.
+ *
+ *   ```js
+ *   const window = await electronApp.firstWindow();
+ *   await window.emulateMedia({ colorScheme: 'dark' });
+ *   ```
+ *
+ * - `extraHTTPHeaders` - use
+ *   [browserContext.setExtraHTTPHeaders(headers)](https://playwright.dev/docs/api/class-browsercontext#browser-context-set-extra-http-headers).
+ *
+ *   ```js
+ *   await electronApp.context().setExtraHTTPHeaders({ 'X-My-Header': 'value' });
+ *   ```
+ *
+ * - `geolocation` - use
+ *   [browserContext.setGeolocation(geolocation)](https://playwright.dev/docs/api/class-browsercontext#browser-context-set-geolocation).
+ *
+ *   ```js
+ *   await electronApp.context().setGeolocation({ latitude: 48.858455, longitude: 2.294474 });
+ *   ```
+ *
+ * - `httpCredentials` - use
+ *   [browserContext.setHTTPCredentials(httpCredentials)](https://playwright.dev/docs/api/class-browsercontext#browser-context-set-http-credentials).
+ *
+ *   ```js
+ *   await electronApp.context().setHTTPCredentials({ username: 'user', password: 'pass' });
+ *   ```
+ *
+ * - `offline` - use
+ *   [browserContext.setOffline(offline)](https://playwright.dev/docs/api/class-browsercontext#browser-context-set-offline).
+ *
+ *   ```js
+ *   await electronApp.context().setOffline(true);
+ *   ```
+ *
+ * - `bypassCSP` - disable CSP at the `BrowserWindow` level via Electron's
+ *   [web preferences](https://www.electronjs.org/docs/latest/api/structures/web-preferences). Note that
+ *   `webSecurity: false` also disables CORS and the Same-Origin Policy.
+ *
+ *   ```js
+ *   const win = new BrowserWindow({
+ *     webPreferences: {
+ *       webSecurity: false,
+ *     },
+ *   });
+ *   ```
+ *
+ * - `ignoreHTTPSErrors`
+ *
+ *   There are several ways to relax HTTPS checks in Electron. Pick the one that matches the scope you need.
+ *
+ *   Per-window, allow mixed content through
+ *   [web preferences](https://www.electronjs.org/docs/latest/api/structures/web-preferences):
+ *
+ *   ```js
+ *   const win = new BrowserWindow({
+ *     webPreferences: {
+ *       allowRunningInsecureContent: true,
+ *     },
+ *   });
+ *   ```
+ *
+ *   Process-wide, ignore certificate errors via Chromium command-line switches (must run before the `ready` event):
+ *
+ *   ```js
+ *   const { app } = require('electron');
+ *   app.commandLine.appendSwitch('ignore-certificate-errors');
+ *   // Optional: also ignore localhost certificate errors when testing on an IP.
+ *   app.commandLine.appendSwitch('allow-insecure-localhost', 'true');
+ *   ```
+ *
+ *   Per-request, accept the certificate manually via the
+ *   [`certificate-error`](https://www.electronjs.org/docs/latest/api/app#event-certificate-error) event:
+ *
+ *   ```js
+ *   app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
+ *     event.preventDefault();
+ *     callback(true);
+ *   });
+ *   ```
+ *
+ * - `timezoneId` - set an environment variable at the very top of the main file, before any other logic or Chromium
+ *   windows are initialized.
+ *
+ *   ```js
+ *   // main.js
+ *   process.env.TZ = 'Europe/London';
+ *
+ *   const { app } = require('electron');
+ *   // ... rest of your app logic
+ *   ```
+ *
+ */
+export interface Electron {
+  /**
+   * Launches electron application specified with the
+   * [`executablePath`](https://playwright.dev/docs/api/class-electron#electron-launch-option-executable-path).
+   * @param options
+   */
+  launch(options?: {
+    /**
+     * Additional arguments to pass to the application when launching. You typically pass the main script name here.
+     */
+    args?: Array<string>;
+
+    /**
+     * Enable Chromium sandboxing. Defaults to `false`.
+     */
+    chromiumSandbox?: boolean;
+
+    /**
+     * Current working directory to launch application from.
+     */
+    cwd?: string;
+
+    /**
+     * Specifies environment variables that will be visible to Electron. Defaults to `process.env`.
+     */
+    env?: { [key: string]: string; };
+
+    /**
+     * Launches given Electron application. If not specified, launches the default Electron executable installed in this
+     * package, located at `node_modules/.bin/electron`.
+     */
+    executablePath?: string;
+
+    /**
+     * Maximum time in milliseconds to wait for the application to start. Defaults to `30000` (30 seconds). Pass `0` to
+     * disable timeout.
+     */
+    timeout?: number;
+  }): Promise<ElectronApplication>;
 }
 
 export interface LaunchOptions {

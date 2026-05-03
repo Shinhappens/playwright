@@ -15,6 +15,7 @@
  */
 
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { Transform } from 'stream';
 
@@ -22,13 +23,13 @@ import colors from 'colors/safe';
 import mime from 'mime';
 import open from 'open';
 import * as yazl from 'yazl';
-import { assert } from '@isomorphic/assert';
 import { MultiMap } from '@isomorphic/multimap';
 import { calculateSha1 } from '@utils/crypto';
 import { copyFileAndMakeWritable, removeFolders, sanitizeForFilePath, toPosixPath } from '@utils/fileUtils';
-import { getPackageManagerExecCommand } from '@utils/env';
+import { getPackageManagerExecCommand, isCodingAgent } from '@utils/env';
 import { HttpServer, serveFolder } from '@utils/httpServer';
 import { gracefullyProcessExitDoNotHang } from '@utils/processLauncher';
+import { extractZip } from '@utils/third_party/extractZip';
 
 // HMR: build-time flag — `true` in watch builds, `false` in release. esbuild's
 // `define` in the runner bundle replaces this so the dev-server code (incl.
@@ -169,8 +170,7 @@ class HtmlReporter implements ReporterV2 {
     if (process.env.CI || !this._buildResult)
       return;
     const { ok, singleTestId } = this._buildResult;
-    const isCodingAgent = !!process.env.CLAUDECODE || !!process.env.COPILOT_CLI;
-    const shouldOpen = !isCodingAgent && !!process.stdin.isTTY && (this._open === 'always' || (!ok && this._open === 'on-failure'));
+    const shouldOpen = !isCodingAgent() && !!process.stdin.isTTY && (this._open === 'always' || (!ok && this._open === 'on-failure'));
     if (shouldOpen) {
       await showHTMLReport(this._outputFolder, this._host, this._port, singleTestId);
     } else if (this._options._mode === 'test' && !!process.stdin.isTTY) {
@@ -218,12 +218,48 @@ function standaloneDefaultFolder(): string {
   return reportFolderFromEnv() ?? resolveReporterOutputPath('playwright-report', process.cwd(), undefined);
 }
 
-export async function showHTMLReport(reportFolder: string | undefined, host: string = 'localhost', port?: number, testId?: string) {
-  const folder = reportFolder ?? standaloneDefaultFolder();
+async function resolveReportFolder(reportPath: string): Promise<string> {
+  const stat = await fs.promises.stat(reportPath).catch(() => null);
+  if (!stat)
+    throw new Error(`No report found at "${reportPath}"`);
+  if (stat.isDirectory())
+    return reportPath;
+  if (stat.isFile() && reportPath.toLowerCase().endsWith('.zip'))
+    return await extractReportZip(reportPath);
+  throw new Error(`No report found at "${reportPath}"`);
+}
+
+async function extractReportZip(zipPath: string): Promise<string> {
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'playwright-show-report-'));
+  const cleanup = () => {
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+    }
+  };
+  // Default Node behavior on SIGINT/SIGTERM is to terminate, which fires 'exit'.
+  process.on('exit', cleanup);
   try {
-    assert(fs.statSync(folder).isDirectory());
+    await extractZip(zipPath, { dir: tempDir });
   } catch (e) {
-    writeLine(colors.red(`No report found at "${folder}"`));
+    cleanup();
+    throw new Error(`Failed to extract report from "${zipPath}": ${e.message}`);
+  }
+  const hasIndex = await fs.promises.access(path.join(tempDir, 'index.html')).then(() => true, () => false);
+  if (!hasIndex) {
+    cleanup();
+    throw new Error(`No "index.html" found at the top level of "${zipPath}"`);
+  }
+  return tempDir;
+}
+
+export async function showHTMLReport(reportFolder: string | undefined, host: string = 'localhost', port?: number, testId?: string) {
+  const requestedPath = reportFolder ?? standaloneDefaultFolder();
+  let folder: string;
+  try {
+    folder = await resolveReportFolder(requestedPath);
+  } catch (e) {
+    writeLine(colors.red(e.message));
     gracefullyProcessExitDoNotHang(1);
     return;
   }
@@ -241,7 +277,8 @@ export async function showHTMLReport(reportFolder: string | undefined, host: str
   if (testId)
     url += `#?testId=${testId}`;
   url = url.replace('0.0.0.0', 'localhost');
-  await open(url, { wait: true }).catch(() => {});
+  if (!isCodingAgent())
+    await open(url, { wait: true }).catch(() => {});
   await new Promise(() => {});
 }
 
@@ -485,7 +522,7 @@ class HtmlBuilder {
         location,
         duration,
         annotations: this._serializeAnnotations(test.annotations),
-        tags: test.tags,
+        tags: [...new Set(test.tags)],
         outcome: test.outcome(),
         path,
         results,
@@ -499,7 +536,7 @@ class HtmlBuilder {
         location,
         duration,
         annotations: this._serializeAnnotations(test.annotations),
-        tags: test.tags,
+        tags: [...new Set(test.tags)],
         outcome: test.outcome(),
         path,
         ok: test.outcome() === 'expected' || test.outcome() === 'flaky',

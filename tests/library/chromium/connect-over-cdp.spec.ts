@@ -24,8 +24,6 @@ import { suppressCertificateWarning } from '../../config/utils';
 const { nullProgress } = coreServer;
 type Frame = coreServer.Frame;
 
-test.skip(({ mode }) => mode === 'service2');
-
 test('should connect to an existing cdp session', async ({ browserType, mode }, testInfo) => {
   const port = 9339 + testInfo.workerIndex;
   const browserServer = await browserType.launch({
@@ -428,6 +426,25 @@ test('should use proxy with connectOverCDP', async ({ browserType, server }, tes
     await cdpBrowser.close();
   } finally {
     await browserServer.close();
+  }
+});
+
+test('should use env proxy with connectOverCDP discovery request', async ({ browserType, server, proxyServer, mode }) => {
+  test.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/40394' });
+  test.skip(mode !== 'default'); // Out of process transport does not allow us to set env vars dynamically.
+  proxyServer.forwardTo(server.PORT);
+
+  const oldValue = process.env.HTTP_PROXY;
+  try {
+    process.env.HTTP_PROXY = proxyServer.URL;
+    const error = await browserType.connectOverCDP(server.PREFIX).catch(e => e);
+    expect(error.message).toContain(`Unexpected status 404 when connecting to ${server.PREFIX}/json/version/`);
+    expect(proxyServer.requestUrls).toEqual([`${server.PREFIX}/json/version/`]);
+  } finally {
+    if (oldValue === undefined)
+      delete process.env.HTTP_PROXY;
+    else
+      process.env.HTTP_PROXY = oldValue;
   }
 });
 
