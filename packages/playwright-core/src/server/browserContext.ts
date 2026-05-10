@@ -527,7 +527,7 @@ export abstract class BrowserContext<EM extends EventMap = EventMap> extends Sdk
   }
 
   private async _deleteAllTempDirs(): Promise<void> {
-    await Promise.all(this._tempDirs.map(async dir => await fs.promises.unlink(dir).catch(e => {})));
+    await Promise.all(this._tempDirs.map(async dir => await fs.promises.rm(dir, { recursive: true, force: true }).catch(e => {})));
   }
 
   setCustomCloseHandler(handler: (() => Promise<any>) | undefined) {
@@ -726,8 +726,13 @@ export function validateBrowserContextOptions(options: types.BrowserContextOptio
     throw new Error(`"deviceScaleFactor" option is not supported with null "viewport"`);
   if (options.noDefaultViewport && !!options.isMobile)
     throw new Error(`"isMobile" option is not supported with null "viewport"`);
-  if (options.acceptDownloads === undefined)
+  if (options.acceptDownloads === undefined && browserOptions.name !== 'electron')
     options.acceptDownloads = 'accept';
+  // Electron requires explicit acceptDownloads: true since we wait for
+  // https://github.com/electron/electron/pull/41718 to be widely shipped.
+  // In 6-12 months, we can remove this check.
+  else if (options.acceptDownloads === undefined && browserOptions.name === 'electron')
+    options.acceptDownloads = 'internal-browser-default';
   if (!options.viewport && !options.noDefaultViewport)
     options.viewport = { width: 1280, height: 720 };
   if (options.proxy)

@@ -237,6 +237,13 @@ interface TestProject<TestArgs = {}, WorkerArgs = {}> {
        * for details.
        */
       pathTemplate?: string;
+
+      /**
+       * Default timeout for
+       * [expect(page).toHaveScreenshot(name[, options])](https://playwright.dev/docs/api/class-pageassertions#page-assertions-to-have-screenshot-1)
+       * in milliseconds, defaults to the global expect timeout. Setting to `0` disables the timeout.
+       */
+      timeout?: number;
     };
 
     /**
@@ -529,6 +536,8 @@ interface TestProject<TestArgs = {}, WorkerArgs = {}> {
    *     config)
    * - `{testFileDir}` - Directories in relative path from `testDir` to **test file**.
    *   - Value: `page`
+   * - `{testFileBaseName}` - Test file name without the last extension.
+   *   - Value: `page-click.spec`
    * - `{testFileName}` - Test file name with extension.
    *   - Value: `page-click.spec.ts`
    * - `{testFilePath}` - Relative path from `testDir` to **test file**.
@@ -1770,6 +1779,8 @@ interface TestConfig<TestArgs = {}, WorkerArgs = {}> {
    *     config)
    * - `{testFileDir}` - Directories in relative path from `testDir` to **test file**.
    *   - Value: `page`
+   * - `{testFileBaseName}` - Test file name without the last extension.
+   *   - Value: `page-click.spec`
    * - `{testFileName}` - Test file name with extension.
    *   - Value: `page-click.spec.ts`
    * - `{testFilePath}` - Relative path from `testDir` to **test file**.
@@ -10008,45 +10019,10 @@ export interface TestInfoError {
   cause?: TestInfoError;
 
   /**
-   * Structured information about a matcher failure. Set when the error originated from an `expect(...)` matcher; unset
-   * otherwise.
+   * Additional context for the error, such as the aria snapshot of the receiver at the time of an `expect(...)` matcher
+   * failure.
    */
-  matcherResult?: {
-    /**
-     * Matcher name (e.g. `toBeVisible`).
-     */
-    name: string;
-
-    /**
-     * Whether the matcher passed.
-     */
-    pass: boolean;
-
-    /**
-     * Expected value.
-     */
-    expected?: any;
-
-    /**
-     * Received value.
-     */
-    actual?: any;
-
-    /**
-     * Matcher log lines, if any.
-     */
-    log?: Array<string>;
-
-    /**
-     * Matcher timeout in milliseconds, set when the matcher timed out.
-     */
-    timeout?: number;
-
-    /**
-     * Aria snapshot of the receiver at the time of failure, if available.
-     */
-    ariaSnapshot?: string;
-  };
+  errorContext?: string;
 
   /**
    * Error message. Set when [Error] (or its subclass) has been thrown.

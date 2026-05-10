@@ -99,28 +99,46 @@ export class SnapshotRenderer {
         }
       } else if (isNodeNameAttributesChildNodesSnapshot(n)) {
         const [name, nodeAttrs, ...children] = n;
+        // Filter SCRIPT elements. The capture side already strips these, but a
+        // crafted trace file could include them to achieve XSS.
+        if (name.toUpperCase() === 'SCRIPT')
+          return;
         // Element node.
         // Note that <noscript> will not be rendered by default in the trace viewer, because
         // JS is enabled. So rename it to <x-noscript>.
-        const nodeName = name === 'NOSCRIPT' ? 'X-NOSCRIPT' : name;
+        const upperName = name.toUpperCase();
+        const nodeName = upperName === 'NOSCRIPT' ? 'X-NOSCRIPT' : name;
         const attrs = Object.entries(nodeAttrs || {});
         result.push('<', nodeName);
         const kCurrentSrcAttribute = '__playwright_current_src__';
-        const isFrame = nodeName === 'IFRAME' || nodeName === 'FRAME';
-        const isAnchor = nodeName === 'A';
-        const isImg = nodeName === 'IMG';
-        const isMeta = nodeName === 'META';
+        const isFrame = upperName === 'IFRAME' || upperName === 'FRAME';
+        const isAnchor = upperName === 'A';
+        const isImg = upperName === 'IMG';
+        const isMeta = upperName === 'META';
         const isImgWithCurrentSrc = isImg && attrs.some(a => a[0] === kCurrentSrcAttribute);
-        const isSourceInsidePictureWithCurrentSrc = nodeName === 'SOURCE' && parentTag === 'PICTURE' && parentAttrs?.some(a => a[0] === kCurrentSrcAttribute);
+        const isSourceInsidePictureWithCurrentSrc = upperName === 'SOURCE' && parentTag === 'PICTURE' && parentAttrs?.some(a => a[0] === kCurrentSrcAttribute);
         // For META, only allow a small whitelist of http-equiv directives so a malicious snapshot
         // cannot navigate the snapshot iframe via e.g. <meta http-equiv="refresh"> or otherwise
         // affect the trace viewer.
         const hasUnsafeHttpEquiv = isMeta && attrs.some(a => a[0].toLowerCase() === 'http-equiv' && !kAllowedMetaHttpEquivs.has(a[1].trim().toLowerCase()));
         for (const [attr, value] of attrs) {
           let attrName = attr;
+          // Strip event handler attributes. The capture side already empties these,
+          // but a crafted trace file could include live handlers (e.g. onerror, onclick).
+          // escapeHTMLAttribute does not help because payloads like "alert(1)" contain
+          // no characters that need escaping.
+          if (attr.toLowerCase().startsWith('on'))
+            continue;
           if (isFrame && attr.toLowerCase() === 'src') {
             // Never set relative URLs as <iframe src> - they start fetching frames immediately.
             attrName = '__playwright_src__';
+          }
+          if (isFrame && (attr.toLowerCase() === 'srcdoc' || attr.toLowerCase() === 'sandbox')) {
+            // Neutralize srcdoc (could contain arbitrary HTML/script that executes
+            // automatically) and sandbox (attacker-controlled values could alter
+            // iframe security policy). The capture side already skips these, but a
+            // crafted trace could include them.
+            attrName = '__playwright_' + attr.toLowerCase() + '__';
           }
           if (isImg && attr === kCurrentSrcAttribute) {
             // Render currentSrc for images, so that trace viewer does not accidentally
@@ -156,7 +174,10 @@ export class SnapshotRenderer {
     const snapshot = this._snapshot;
     const html = this._htmlCache.getOrCompute(this, () => {
       visit(snapshot.html, this._index, undefined, undefined);
-      const prefix = snapshot.doctype ? `<!DOCTYPE ${snapshot.doctype}>` : '';
+      // Sanitize doctype to prevent injection from crafted trace files.
+      // Valid doctype names (from document.doctype.name) only contain alphanumeric characters.
+      const safeDoctype = snapshot.doctype?.replace(/[^a-zA-Z0-9]/g, '');
+      const prefix = safeDoctype ? `<!DOCTYPE ${safeDoctype}>` : '';
       const html = prefix + [
         // Hide the document in order to prevent flickering. We will unhide once script has processed shadow.
         '<style>*,*::before,*::after { visibility: hidden }</style>',

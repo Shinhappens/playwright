@@ -15,7 +15,6 @@
  */
 
 import path from 'path';
-import { inheritAndCleanEnv } from './utils';
 import type { BrowserType, Browser } from 'playwright-core';
 import type { CommonFixtures, TestChildProcess } from './commonFixtures';
 
@@ -36,7 +35,7 @@ export class RunServer implements PlaywrightServer {
       command.push(`--artifacts-dir=${options.artifactsDir}`);
     this._process = childProcess({
       command,
-      env: inheritAndCleanEnv(options?.env),
+      env: { NODE_OPTIONS: process.env.NODE_OPTIONS, ...options?.env },
     });
 
     let wsEndpointCallback: (value: string) => void;
@@ -70,7 +69,6 @@ export type RemoteServerOptions = {
   startStopAndRunHttp?: boolean;
   sharedBrowser?: boolean;
   artifactsDir?: string;
-  allowClientNetwork?: string;
 };
 
 export class RemoteServer implements PlaywrightServer {
@@ -101,8 +99,6 @@ export class RemoteServer implements PlaywrightServer {
       (launchOptions as any)._sharedBrowser = true;
     if (remoteServerOptions.artifactsDir)
       launchOptions.artifactsDir = remoteServerOptions.artifactsDir;
-    if (remoteServerOptions.allowClientNetwork !== undefined)
-      launchOptions.allowClientNetwork = remoteServerOptions.allowClientNetwork;
     const options = {
       browserTypeName: browserType.name(),
       channel,
@@ -111,6 +107,7 @@ export class RemoteServer implements PlaywrightServer {
     };
     this._process = childProcess({
       command: ['node', path.join(__dirname, 'remote-server-impl.js'), JSON.stringify(options)],
+      env: { NODE_OPTIONS: process.env.NODE_OPTIONS },
     });
 
     let index = 0;

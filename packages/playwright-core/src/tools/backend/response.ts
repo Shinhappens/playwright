@@ -251,8 +251,6 @@ export class Response {
         addSection('Open tabs', renderTabsMarkdown(tabHeaders));
       addSection('Page', renderTabMarkdown(tabHeaders.find(h => h.current) ?? tabHeaders[0]));
     }
-    if (this._context.tabs().length === 0)
-      this._isClose = true;
 
     // Handle modal states.
     if (tabSnapshot?.modalStates.length)
@@ -300,6 +298,8 @@ export function renderTabMarkdown(tab: TabHeader): string[] {
   const lines = [`- Page URL: ${tab.url}`];
   if (tab.title)
     lines.push(`- Page Title: ${tab.title}`);
+  if (tab.crashed)
+    lines.push(`- Page status: crashed`);
   if (tab.console.errors || tab.console.warnings)
     lines.push(`- Console: ${tab.console.errors} errors, ${tab.console.warnings} warnings`);
   return lines;
@@ -313,7 +313,8 @@ export function renderTabsMarkdown(tabs: TabHeader[]): string[] {
   for (let i = 0; i < tabs.length; i++) {
     const tab = tabs[i];
     const current = tab.current ? ' (current)' : '';
-    lines.push(`- ${i}:${current} [${tab.title}](${tab.url})`);
+    const crashed = tab.crashed ? ' [crashed]' : '';
+    lines.push(`- ${i}:${current} [${tab.title}](${tab.url})${crashed}`);
   }
   return lines;
 }
