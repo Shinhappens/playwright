@@ -18,7 +18,7 @@
 
 import { scheme, tOptional, tObject, tBoolean, tInt, tFloat, tString, tAny, tEnum, tArray, tBinary, tChannel, tType } from './validatorPrimitives';
 export type { Validator, ValidatorContext } from './validatorPrimitives';
-export { ValidationError, findValidator, maybeFindValidator, createMetadataValidator } from './validatorPrimitives';
+export { ValidationError, findValidator, maybeFindValidator, createMetadataValidator, createWaitInfoValidator } from './validatorPrimitives';
 
 scheme.AndroidInitializer = tOptional(tObject({}));
 scheme.AndroidDevicesParams = tObject({
@@ -927,6 +927,33 @@ scheme.BrowserContextClockSetSystemTimeParams = tObject({
   timeString: tOptional(tString),
 });
 scheme.BrowserContextClockSetSystemTimeResult = tOptional(tObject({}));
+scheme.BrowserContextCredentialsInstallParams = tOptional(tObject({}));
+scheme.BrowserContextCredentialsInstallResult = tOptional(tObject({}));
+scheme.BrowserContextCredentialsCreateParams = tObject({
+  rpId: tString,
+  id: tOptional(tString),
+  userHandle: tOptional(tString),
+  privateKey: tOptional(tString),
+  publicKey: tOptional(tString),
+});
+scheme.BrowserContextCredentialsCreateResult = tObject({
+  credential: tType('VirtualCredential'),
+});
+scheme.BrowserContextCredentialsGetParams = tObject({
+  rpId: tOptional(tString),
+  id: tOptional(tString),
+});
+scheme.BrowserContextCredentialsGetResult = tObject({
+  credentials: tArray(tType('VirtualCredential')),
+});
+scheme.BrowserContextCredentialsDeleteParams = tObject({
+  id: tString,
+});
+scheme.BrowserContextCredentialsDeleteResult = tOptional(tObject({}));
+scheme.BrowserContextCredentialsSetUserVerifiedParams = tObject({
+  value: tBoolean,
+});
+scheme.BrowserContextCredentialsSetUserVerifiedResult = tOptional(tObject({}));
 scheme.BrowserTypeInitializer = tObject({
   executablePath: tString,
   name: tString,
@@ -1059,6 +1086,7 @@ scheme.BrowserTypeConnectOverCDPParams = tObject({
   timeout: tFloat,
   isLocal: tOptional(tBoolean),
   noDefaults: tOptional(tBoolean),
+  artifactsDir: tOptional(tString),
 });
 scheme.BrowserTypeConnectOverCDPResult = tObject({
   browser: tChannel(['Browser']),
@@ -1089,31 +1117,13 @@ scheme.SDKLanguage = tEnum(['javascript', 'python', 'java', 'csharp']);
 scheme.DisposableInitializer = tOptional(tObject({}));
 scheme.DisposableDisposeParams = tOptional(tObject({}));
 scheme.DisposableDisposeResult = tOptional(tObject({}));
-scheme.EventTargetInitializer = tOptional(tObject({}));
-scheme.EventTargetWaitForEventInfoParams = tObject({
-  info: tObject({
-    waitId: tString,
-    phase: tEnum(['before', 'after', 'log']),
-    event: tOptional(tString),
-    message: tOptional(tString),
-    error: tOptional(tString),
-  }),
+scheme.WaitInfo = tObject({
+  waitId: tString,
+  phase: tEnum(['before', 'after', 'log']),
+  event: tOptional(tString),
+  message: tOptional(tString),
+  error: tOptional(tString),
 });
-scheme.AndroidDeviceWaitForEventInfoParams = tType('EventTargetWaitForEventInfoParams');
-scheme.BrowserContextWaitForEventInfoParams = tType('EventTargetWaitForEventInfoParams');
-scheme.ElectronApplicationWaitForEventInfoParams = tType('EventTargetWaitForEventInfoParams');
-scheme.WebSocketWaitForEventInfoParams = tType('EventTargetWaitForEventInfoParams');
-scheme.PageWaitForEventInfoParams = tType('EventTargetWaitForEventInfoParams');
-scheme.DebuggerWaitForEventInfoParams = tType('EventTargetWaitForEventInfoParams');
-scheme.WorkerWaitForEventInfoParams = tType('EventTargetWaitForEventInfoParams');
-scheme.EventTargetWaitForEventInfoResult = tOptional(tObject({}));
-scheme.AndroidDeviceWaitForEventInfoResult = tType('EventTargetWaitForEventInfoResult');
-scheme.BrowserContextWaitForEventInfoResult = tType('EventTargetWaitForEventInfoResult');
-scheme.ElectronApplicationWaitForEventInfoResult = tType('EventTargetWaitForEventInfoResult');
-scheme.WebSocketWaitForEventInfoResult = tType('EventTargetWaitForEventInfoResult');
-scheme.PageWaitForEventInfoResult = tType('EventTargetWaitForEventInfoResult');
-scheme.DebuggerWaitForEventInfoResult = tType('EventTargetWaitForEventInfoResult');
-scheme.WorkerWaitForEventInfoResult = tType('EventTargetWaitForEventInfoResult');
 scheme.ElectronInitializer = tOptional(tObject({}));
 scheme.ElectronLaunchParams = tObject({
   executablePath: tOptional(tString),
@@ -2299,10 +2309,11 @@ scheme.PageAddInitScriptResult = tObject({
   disposable: tChannel(['Disposable']),
 });
 scheme.PageCloseParams = tObject({
-  runBeforeUnload: tOptional(tBoolean),
   reason: tOptional(tString),
 });
 scheme.PageCloseResult = tOptional(tObject({}));
+scheme.PageRunBeforeUnloadParams = tOptional(tObject({}));
+scheme.PageRunBeforeUnloadResult = tOptional(tObject({}));
 scheme.PageClearConsoleMessagesParams = tOptional(tObject({}));
 scheme.PageClearConsoleMessagesResult = tOptional(tObject({}));
 scheme.PageConsoleMessagesParams = tObject({
@@ -2647,6 +2658,34 @@ scheme.PageSetDockTileParams = tObject({
   image: tBinary,
 });
 scheme.PageSetDockTileResult = tOptional(tObject({}));
+scheme.PageWebStorageItemsParams = tObject({
+  kind: tEnum(['local', 'session']),
+});
+scheme.PageWebStorageItemsResult = tObject({
+  items: tArray(tType('NameValue')),
+});
+scheme.PageWebStorageGetItemParams = tObject({
+  kind: tEnum(['local', 'session']),
+  name: tString,
+});
+scheme.PageWebStorageGetItemResult = tObject({
+  value: tOptional(tString),
+});
+scheme.PageWebStorageSetItemParams = tObject({
+  kind: tEnum(['local', 'session']),
+  name: tString,
+  value: tString,
+});
+scheme.PageWebStorageSetItemResult = tOptional(tObject({}));
+scheme.PageWebStorageRemoveItemParams = tObject({
+  kind: tEnum(['local', 'session']),
+  name: tString,
+});
+scheme.PageWebStorageRemoveItemResult = tOptional(tObject({}));
+scheme.PageWebStorageClearParams = tObject({
+  kind: tEnum(['local', 'session']),
+});
+scheme.PageWebStorageClearResult = tOptional(tObject({}));
 scheme.RootInitializer = tOptional(tObject({}));
 scheme.RootInitializeParams = tObject({
   sdkLanguage: tType('SDKLanguage'),
@@ -2990,6 +3029,13 @@ scheme.StackFrame = tObject({
   line: tInt,
   column: tInt,
   function: tOptional(tString),
+});
+scheme.VirtualCredential = tObject({
+  id: tString,
+  rpId: tString,
+  userHandle: tString,
+  privateKey: tString,
+  publicKey: tString,
 });
 scheme.Point = tObject({
   x: tFloat,
