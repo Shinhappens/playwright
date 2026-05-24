@@ -443,6 +443,7 @@ export type AndroidDeviceLaunchBrowserParams = {
       duration?: number,
       position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right',
       fontSize?: number,
+      cursor?: 'none' | 'pointer',
     },
   },
   strictSelectors?: boolean,
@@ -514,6 +515,7 @@ export type AndroidDeviceLaunchBrowserOptions = {
       duration?: number,
       position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right',
       fontSize?: number,
+      cursor?: 'none' | 'pointer',
     },
   },
   strictSelectors?: boolean,
@@ -736,6 +738,8 @@ export type APIResponse = {
   status: number,
   statusText: string,
   headers: NameValue[],
+  securityDetails?: SecurityDetails,
+  serverAddr?: RemoteAddr,
 };
 
 // ----------- Artifact -----------
@@ -957,6 +961,7 @@ export type BrowserNewContextParams = {
       duration?: number,
       position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right',
       fontSize?: number,
+      cursor?: 'none' | 'pointer',
     },
   },
   strictSelectors?: boolean,
@@ -1030,6 +1035,7 @@ export type BrowserNewContextOptions = {
       duration?: number,
       position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right',
       fontSize?: number,
+      cursor?: 'none' | 'pointer',
     },
   },
   strictSelectors?: boolean,
@@ -1106,6 +1112,7 @@ export type BrowserNewContextForReuseParams = {
       duration?: number,
       position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right',
       fontSize?: number,
+      cursor?: 'none' | 'pointer',
     },
   },
   strictSelectors?: boolean,
@@ -1179,6 +1186,7 @@ export type BrowserNewContextForReuseOptions = {
       duration?: number,
       position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right',
       fontSize?: number,
+      cursor?: 'none' | 'pointer',
     },
   },
   strictSelectors?: boolean,
@@ -1294,6 +1302,7 @@ export type BrowserContextInitializer = {
         duration?: number,
         position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right',
         fontSize?: number,
+        cursor?: 'none' | 'pointer',
       },
     },
     strictSelectors?: boolean,
@@ -1813,6 +1822,7 @@ export interface BrowserTypeChannel extends BrowserTypeEventTarget, Channel {
   launch(params: BrowserTypeLaunchParams, progress?: Progress): Promise<BrowserTypeLaunchResult>;
   launchPersistentContext(params: BrowserTypeLaunchPersistentContextParams, progress?: Progress): Promise<BrowserTypeLaunchPersistentContextResult>;
   connectOverCDP(params: BrowserTypeConnectOverCDPParams, progress?: Progress): Promise<BrowserTypeConnectOverCDPResult>;
+  connectOverCDPTransport(params: BrowserTypeConnectOverCDPTransportParams, progress?: Progress): Promise<BrowserTypeConnectOverCDPTransportResult>;
   connectToWorker(params: BrowserTypeConnectToWorkerParams, progress?: Progress): Promise<BrowserTypeConnectToWorkerResult>;
 }
 export type BrowserTypeLaunchParams = {
@@ -1948,6 +1958,7 @@ export type BrowserTypeLaunchPersistentContextParams = {
       duration?: number,
       position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right',
       fontSize?: number,
+      cursor?: 'none' | 'pointer',
     },
   },
   strictSelectors?: boolean,
@@ -2035,6 +2046,7 @@ export type BrowserTypeLaunchPersistentContextOptions = {
       duration?: number,
       position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right',
       fontSize?: number,
+      cursor?: 'none' | 'pointer',
     },
   },
   strictSelectors?: boolean,
@@ -2064,6 +2076,16 @@ export type BrowserTypeConnectOverCDPOptions = {
   artifactsDir?: string,
 };
 export type BrowserTypeConnectOverCDPResult = {
+  browser: BrowserChannel,
+  defaultContext?: BrowserContextChannel,
+};
+export type BrowserTypeConnectOverCDPTransportParams = {
+  transport: Binary,
+};
+export type BrowserTypeConnectOverCDPTransportOptions = {
+
+};
+export type BrowserTypeConnectOverCDPTransportResult = {
   browser: BrowserChannel,
   defaultContext?: BrowserContextChannel,
 };
@@ -2163,6 +2185,7 @@ export type ElectronLaunchParams = {
       duration?: number,
       position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right',
       fontSize?: number,
+      cursor?: 'none' | 'pointer',
     },
   },
   strictSelectors?: boolean,
@@ -2205,6 +2228,7 @@ export type ElectronLaunchOptions = {
       duration?: number,
       position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right',
       fontSize?: number,
+      cursor?: 'none' | 'pointer',
     },
   },
   strictSelectors?: boolean,
@@ -2933,11 +2957,13 @@ export type FrameTypeParams = {
   strict?: boolean,
   text: string,
   delay?: number,
+  namedKeys?: boolean,
   timeout: number,
 };
 export type FrameTypeOptions = {
   strict?: boolean,
   delay?: number,
+  namedKeys?: boolean,
 };
 export type FrameTypeResult = void;
 export type FrameUncheckParams = {
@@ -4415,9 +4441,11 @@ export type PageKeyboardInsertTextResult = void;
 export type PageKeyboardTypeParams = {
   text: string,
   delay?: number,
+  namedKeys?: boolean,
 };
 export type PageKeyboardTypeOptions = {
   delay?: number,
+  namedKeys?: boolean,
 };
 export type PageKeyboardTypeResult = void;
 export type PageKeyboardPressParams = {
@@ -4644,11 +4672,13 @@ export type PageScreencastShowActionsParams = {
   duration?: number,
   position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right',
   fontSize?: number,
+  cursor?: 'none' | 'pointer',
 };
 export type PageScreencastShowActionsOptions = {
   duration?: number,
   position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right',
   fontSize?: number,
+  cursor?: 'none' | 'pointer',
 };
 export type PageScreencastShowActionsResult = void;
 export type PageScreencastHideActionsParams = {};

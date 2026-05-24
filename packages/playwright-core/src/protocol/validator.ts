@@ -207,6 +207,7 @@ scheme.AndroidDeviceLaunchBrowserParams = tObject({
       duration: tOptional(tFloat),
       position: tOptional(tEnum(['top-left', 'top', 'top-right', 'bottom-left', 'bottom', 'bottom-right'])),
       fontSize: tOptional(tInt),
+      cursor: tOptional(tEnum(['none', 'pointer'])),
     })),
   })),
   strictSelectors: tOptional(tBoolean),
@@ -358,6 +359,8 @@ scheme.APIResponse = tObject({
   status: tInt,
   statusText: tString,
   headers: tArray(tType('NameValue')),
+  securityDetails: tOptional(tType('SecurityDetails')),
+  serverAddr: tOptional(tType('RemoteAddr')),
 });
 scheme.ArtifactInitializer = tObject({
   absolutePath: tString,
@@ -489,6 +492,7 @@ scheme.BrowserNewContextParams = tObject({
       duration: tOptional(tFloat),
       position: tOptional(tEnum(['top-left', 'top', 'top-right', 'bottom-left', 'bottom', 'bottom-right'])),
       fontSize: tOptional(tInt),
+      cursor: tOptional(tEnum(['none', 'pointer'])),
     })),
   })),
   strictSelectors: tOptional(tBoolean),
@@ -565,6 +569,7 @@ scheme.BrowserNewContextForReuseParams = tObject({
       duration: tOptional(tFloat),
       position: tOptional(tEnum(['top-left', 'top', 'top-right', 'bottom-left', 'bottom', 'bottom-right'])),
       fontSize: tOptional(tInt),
+      cursor: tOptional(tEnum(['none', 'pointer'])),
     })),
   })),
   strictSelectors: tOptional(tBoolean),
@@ -663,6 +668,7 @@ scheme.BrowserContextInitializer = tObject({
         duration: tOptional(tFloat),
         position: tOptional(tEnum(['top-left', 'top', 'top-right', 'bottom-left', 'bottom', 'bottom-right'])),
         fontSize: tOptional(tInt),
+        cursor: tOptional(tEnum(['none', 'pointer'])),
       })),
     })),
     strictSelectors: tOptional(tBoolean),
@@ -1066,6 +1072,7 @@ scheme.BrowserTypeLaunchPersistentContextParams = tObject({
       duration: tOptional(tFloat),
       position: tOptional(tEnum(['top-left', 'top', 'top-right', 'bottom-left', 'bottom', 'bottom-right'])),
       fontSize: tOptional(tInt),
+      cursor: tOptional(tEnum(['none', 'pointer'])),
     })),
   })),
   strictSelectors: tOptional(tBoolean),
@@ -1089,6 +1096,13 @@ scheme.BrowserTypeConnectOverCDPParams = tObject({
   artifactsDir: tOptional(tString),
 });
 scheme.BrowserTypeConnectOverCDPResult = tObject({
+  browser: tChannel(['Browser']),
+  defaultContext: tOptional(tChannel(['BrowserContext'])),
+});
+scheme.BrowserTypeConnectOverCDPTransportParams = tObject({
+  transport: tBinary,
+});
+scheme.BrowserTypeConnectOverCDPTransportResult = tObject({
   browser: tChannel(['Browser']),
   defaultContext: tOptional(tChannel(['BrowserContext'])),
 });
@@ -1159,6 +1173,7 @@ scheme.ElectronLaunchParams = tObject({
       duration: tOptional(tFloat),
       position: tOptional(tEnum(['top-left', 'top', 'top-right', 'bottom-left', 'bottom', 'bottom-right'])),
       fontSize: tOptional(tInt),
+      cursor: tOptional(tEnum(['none', 'pointer'])),
     })),
   })),
   strictSelectors: tOptional(tBoolean),
@@ -1600,6 +1615,7 @@ scheme.FrameTypeParams = tObject({
   strict: tOptional(tBoolean),
   text: tString,
   delay: tOptional(tFloat),
+  namedKeys: tOptional(tBoolean),
   timeout: tFloat,
 });
 scheme.FrameTypeResult = tOptional(tObject({}));
@@ -2482,6 +2498,7 @@ scheme.PageKeyboardInsertTextResult = tOptional(tObject({}));
 scheme.PageKeyboardTypeParams = tObject({
   text: tString,
   delay: tOptional(tFloat),
+  namedKeys: tOptional(tBoolean),
 });
 scheme.PageKeyboardTypeResult = tOptional(tObject({}));
 scheme.PageKeyboardPressParams = tObject({
@@ -2631,6 +2648,7 @@ scheme.PageScreencastShowActionsParams = tObject({
   duration: tOptional(tFloat),
   position: tOptional(tEnum(['top-left', 'top', 'top-right', 'bottom-left', 'bottom', 'bottom-right'])),
   fontSize: tOptional(tInt),
+  cursor: tOptional(tEnum(['none', 'pointer'])),
 });
 scheme.PageScreencastShowActionsResult = tOptional(tObject({}));
 scheme.PageScreencastHideActionsParams = tOptional(tObject({}));

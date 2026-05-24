@@ -23,6 +23,7 @@ import { asLocator } from '@isomorphic/locatorGenerators';
 import { assert } from '@isomorphic/assert';
 import { constructURLBasedOnBaseURL } from '@isomorphic/urlMatch';
 import { makeWaitForNextTask } from '@utils/task';
+import { createGuid } from '@utils/crypto';
 import { BrowserContext } from './browserContext';
 import * as dom from './dom';
 import { TimeoutError } from './errors';
@@ -475,7 +476,6 @@ export class Frame extends SdkObject<FrameEventMap> {
   _name = '';
   _inflightRequests = new Set<network.Request>();
   private _networkIdleTimer: NodeJS.Timeout | undefined;
-  private _setContentCounter = 0;
   readonly _detachedScope = new LongStandingScope();
   private _raceAgainstEvaluationStallingEventsPromises = new Set<ManualPromise<any>>();
   readonly _redirectedNavigations = new Map<string, { url: string, gotoPromise: Promise<network.Response | null> }>(); // documentId -> data
@@ -735,6 +735,8 @@ export class Frame extends SdkObject<FrameEventMap> {
   }
 
   context(world: types.World): Promise<dom.FrameExecutionContext> {
+    if (this._page.delegate.noUtilityWorld?.())
+      world = 'main';
     return this._contextData.get(world)!.contextPromise.then(contextOrDestroyedReason => {
       if (contextOrDestroyedReason instanceof js.ExecutionContext)
         return contextOrDestroyedReason;
@@ -919,7 +921,7 @@ export class Frame extends SdkObject<FrameEventMap> {
   }
 
   async setContent(progress: Progress, html: string, options: types.NavigateOptions): Promise<void> {
-    const tag = `--playwright--set--content--${this._id}--${++this._setContentCounter}--`;
+    const tag = `--playwright--set--content--${createGuid()}--`;
     await this.raceNavigationAction(progress, async () => {
       const waitUntil = options.waitUntil === undefined ? 'load' : options.waitUntil;
       progress.log(`setting frame content, waiting until "${waitUntil}"`);
@@ -1430,7 +1432,7 @@ export class Frame extends SdkObject<FrameEventMap> {
     dom.assertDone(await this._retryWithProgressIfNotConnected(progress, selector, options, (progress, handle) => handle._drop(progress, inputFileItems, data, options)));
   }
 
-  async type(progress: Progress, selector: string, text: string, options: { delay?: number, noAutoWaiting?: boolean } & types.StrictOptions) {
+  async type(progress: Progress, selector: string, text: string, options: { delay?: number, namedKeys?: boolean, noAutoWaiting?: boolean } & types.StrictOptions) {
     return dom.assertDone(await this._retryWithProgressIfNotConnected(progress, selector, options, (progress, handle) => handle._type(progress, text, options)));
   }
 
@@ -1447,7 +1449,17 @@ export class Frame extends SdkObject<FrameEventMap> {
   }
 
   async waitForTimeout(progress: Progress, timeout: number) {
-    return progress.wait(timeout);
+    let timer: NodeJS.Timeout;
+    const promise = new Promise<void>(f => timer = setTimeout(f, timeout));
+    try {
+      // Make sure we react to page close or frame detach.
+      await progress.race(LongStandingScope.raceMultiple([
+        this._page.openScope,
+        this._detachedScope,
+      ], promise));
+    } finally {
+      clearTimeout(timer!);
+    }
   }
 
   async expect(progress: Progress, selector: string | undefined, options: FrameExpectParams): Promise<ExpectResult> {

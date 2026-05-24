@@ -54,7 +54,7 @@ export class FrameExecutionContext extends js.ExecutionContext {
   readonly world: types.World | null;
 
   constructor(delegate: js.ExecutionContextDelegate, frame: frames.Frame, world: types.World|null) {
-    super(frame, delegate, world || 'content-script');
+    super(frame, delegate, world || 'content-script', { noUtilityWorld: frame._page.delegate.noUtilityWorld?.() });
     this.frame = frame;
     this.world = world;
   }
@@ -98,8 +98,10 @@ export class FrameExecutionContext extends js.ExecutionContext {
         isUtilityWorld: this.world === 'utility',
         customEngines,
       };
+      const globalsSnapshot = this.frame._page.delegate.noUtilityWorld?.() ? js.mainWorldGlobalsSnapshotSource : '';
       const source = `
         (() => {
+        ${globalsSnapshot}
         const module = {};
         ${rawInjectedScriptSource.source}
         return new (module.exports.InjectedScript())(globalThis, ${JSON.stringify(options)});
@@ -772,13 +774,13 @@ export class ElementHandle<T extends Node = Node> extends js.JSHandle<T> {
     return await progress.race(this.evaluateInUtility(([injected, node]) => injected.blurNode(node), {}));
   }
 
-  async type(progress: Progress, text: string, options: { delay?: number } & types.StrictOptions): Promise<void> {
+  async type(progress: Progress, text: string, options: { delay?: number, namedKeys?: boolean } & types.StrictOptions): Promise<void> {
     await this._markAsTargetElement(progress);
     const result = await this._type(progress, text, options);
     return assertDone(throwRetargetableDOMError(result));
   }
 
-  async _type(progress: Progress, text: string, options: { delay?: number } & types.StrictOptions): Promise<'error:notconnected' | 'done'> {
+  async _type(progress: Progress, text: string, options: { delay?: number, namedKeys?: boolean } & types.StrictOptions): Promise<'error:notconnected' | 'done'> {
     progress.log(`elementHandle.type("${text}")`);
     await progress.race(this.instrumentation.onBeforeInputAction(this, progress.metadata));
     const result = await this._focus(progress, true /* resetSelectionIfNotFocused */);

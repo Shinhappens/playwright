@@ -22,7 +22,7 @@ import path from 'path';
 import { getUserAgent, server as coreServer } from '../../../packages/playwright-core/lib/coreBundle';
 import { suppressCertificateWarning } from '../../config/utils';
 
-const { nullProgress } = coreServer;
+const { WebSocketTransport, nullProgress } = coreServer;
 type Frame = coreServer.Frame;
 
 test('should connect to an existing cdp session', async ({ browserType, mode }, testInfo) => {
@@ -486,6 +486,25 @@ test('should use env proxy with connectOverCDP discovery request', async ({ brow
   }
 });
 
+test('should send target Host header when using env HTTP proxy with connectOverCDP', async ({ browserType, server, proxyServer, mode }) => {
+  test.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/40811' });
+  test.skip(mode !== 'default'); // Out of process transport does not allow us to set env vars dynamically.
+  proxyServer.forwardTo(server.PORT);
+
+  const oldValue = process.env.HTTP_PROXY;
+  try {
+    process.env.HTTP_PROXY = proxyServer.URL;
+    const error = await browserType.connectOverCDP(server.PREFIX).catch(e => e);
+    expect(error.message).toContain(`Unexpected status 404 when connecting to ${server.PREFIX}/json/version/`);
+    expect(proxyServer.requestHosts).toEqual([new URL(server.PREFIX).host]);
+  } finally {
+    if (oldValue === undefined)
+      delete process.env.HTTP_PROXY;
+    else
+      process.env.HTTP_PROXY = oldValue;
+  }
+});
+
 test('should be able to connect via localhost', async ({ browserType }, testInfo) => {
   const port = 9339 + testInfo.workerIndex;
   const browserServer = await browserType.launch({
@@ -727,6 +746,35 @@ test('noDefaults should not affect new contexts', async ({ browserType, mode, se
 
     await newContext.close();
     await browser.close();
+  } finally {
+    await browserServer.close();
+  }
+});
+
+test('should connect over CDP using a ConnectionTransport', async ({ browserType, mode, server }, testInfo) => {
+  test.skip(mode !== 'default', 'Passing a transport to connectOverCDP is only available in-process');
+
+  const port = 9339 + testInfo.workerIndex;
+  const browserServer = await browserType.launch({
+    args: ['--remote-debugging-port=' + port]
+  });
+  try {
+    const json = await new Promise<string>((resolve, reject) => {
+      http.get(`http://127.0.0.1:${port}/json/version/`, resp => {
+        let data = '';
+        resp.on('data', chunk => data += chunk);
+        resp.on('end', () => resolve(data));
+      }).on('error', reject);
+    });
+    const wsEndpoint = JSON.parse(json).webSocketDebuggerUrl;
+    const transport = await WebSocketTransport.connect(undefined, wsEndpoint);
+    const cdpBrowser = await browserType.connectOverCDP(transport);
+    const contexts = cdpBrowser.contexts();
+    expect(contexts.length).toBe(1);
+    const page = await contexts[0].newPage();
+    await page.goto(server.EMPTY_PAGE);
+    expect(page.url()).toBe(server.EMPTY_PAGE);
+    await cdpBrowser.close();
   } finally {
     await browserServer.close();
   }

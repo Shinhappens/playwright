@@ -19,7 +19,7 @@ import type { APIRequestContext, Browser, BrowserContext, BrowserContextOptions,
 export * from 'playwright-core';
 
 export type BlobReporterOptions = { outputDir?: string, fileName?: string };
-export type ListReporterOptions = { printSteps?: boolean };
+export type ListReporterOptions = { printSteps?: boolean, printFailuresInline?: boolean };
 export type JUnitReporterOptions = { outputFile?: string, stripANSIControlSequences?: boolean, includeProjectInTestName?: boolean, includeRetries?: boolean };
 export type JsonReporterOptions = { outputFile?: string };
 export type HtmlReporterOptions = {
@@ -129,6 +129,54 @@ interface TestProject<TestArgs = {}, WorkerArgs = {}> {
    * all projects.
    */
   use?: UseOptions<TestArgs, WorkerArgs>;
+  /**
+   * Launch a development web server (or multiple) before running tests in this project. See
+   * [testConfig.webServer](https://playwright.dev/docs/api/class-testconfig#test-config-web-server) for the shape of
+   * each entry.
+   *
+   * A per-project `webServer` is only launched when the project is selected (either directly via `--project` or
+   * indirectly through dependencies). This is useful when only a subset of your projects need a local backend, while
+   * others run against a deployed environment.
+   *
+   * Per-project web servers are launched in addition to any top-level
+   * [testConfig.webServer](https://playwright.dev/docs/api/class-testconfig#test-config-web-server).
+   *
+   * **Usage**
+   *
+   * ```js
+   * // playwright.config.ts
+   * import { defineConfig } from '@playwright/test';
+   *
+   * export default defineConfig({
+   *   projects: [
+   *     {
+   *       name: 'functional',
+   *       grepInvert: /@smoke/,
+   *       use: { baseURL: 'http://localhost:3000' },
+   *       webServer: [
+   *         {
+   *           command: 'npm run start',
+   *           url: 'http://localhost:3000',
+   *           reuseExistingServer: !process.env.CI,
+   *         },
+   *         {
+   *           command: 'npm run mock-server',
+   *           port: 3001,
+   *           reuseExistingServer: !process.env.CI,
+   *         },
+   *       ],
+   *     },
+   *     {
+   *       name: 'smoke',
+   *       grep: /@smoke/,
+   *       use: { baseURL: 'https://production.app.com' },
+   *     },
+   *   ],
+   * });
+   * ```
+   *
+   */
+  webServer?: TestConfigWebServer | TestConfigWebServer[];
   /**
    * List of projects that need to run before any test in this project runs. Dependencies can be useful for configuring
    * the global setup actions in a way that every action is in a form of a test. Passing `--no-deps` argument ignores
@@ -2030,6 +2078,12 @@ export interface FullConfig<TestArgs = {}, WorkerArgs = {}> {
    * Path to the configuration file used to run the tests. The value is an empty string if no config file was used.
    */
   configFile?: string;
+
+  /**
+   * See
+   * [testConfig.failOnFlakyTests](https://playwright.dev/docs/api/class-testconfig#test-config-fail-on-flaky-tests).
+   */
+  failOnFlakyTests: boolean;
 
   /**
    * See [testConfig.forbidOnly](https://playwright.dev/docs/api/class-testconfig#test-config-forbid-only).

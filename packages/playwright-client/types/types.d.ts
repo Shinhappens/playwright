@@ -14731,6 +14731,10 @@ export interface Locator {
    * Focuses the element, and then sends a `keydown`, `keypress`/`input`, and `keyup` event for each character in the
    * text.
    *
+   * When [`namedKeys`](https://playwright.dev/docs/api/class-locator#locator-press-sequentially-option-named-keys) is
+   * `true`, anything inside `{}` is treated as a key name (same format as
+   * [locator.press(key[, options])](https://playwright.dev/docs/api/class-locator#locator-press)).
+   *
    * To press a special key, like `Control` or `ArrowDown`, use
    * [locator.press(key[, options])](https://playwright.dev/docs/api/class-locator#locator-press).
    *
@@ -14739,6 +14743,11 @@ export interface Locator {
    * ```js
    * await locator.pressSequentially('Hello'); // Types instantly
    * await locator.pressSequentially('World', { delay: 100 }); // Types slower, like a user
+   *
+   * // Mix characters and named keys
+   * await locator.pressSequentially('Hello{Enter}World', { namedKeys: true });
+   * // Use modifier combos
+   * await locator.pressSequentially('{Control+A}{Delete}Hello', { namedKeys: true });
    * ```
    *
    * An example of typing into a text field and then submitting the form:
@@ -14749,7 +14758,10 @@ export interface Locator {
    * await locator.press('Enter');
    * ```
    *
-   * @param text String of characters to sequentially press into a focused element.
+   * @param text String of characters to sequentially press into a focused element. When
+   * [`namedKeys`](https://playwright.dev/docs/api/class-locator#locator-press-sequentially-option-named-keys) is
+   * `true`, anything inside `{}` is treated as a key name (same format as
+   * [locator.press(key[, options])](https://playwright.dev/docs/api/class-locator#locator-press)).
    * @param options
    */
   pressSequentially(text: string, options?: {
@@ -14757,6 +14769,14 @@ export interface Locator {
      * Time to wait between key presses in milliseconds. Defaults to 0.
      */
     delay?: number;
+
+    /**
+     * When [`namedKeys`](https://playwright.dev/docs/api/class-locator#locator-press-sequentially-option-named-keys) is
+     * `true`, anything inside `{}` is treated as a key name (same format as
+     * [locator.press(key[, options])](https://playwright.dev/docs/api/class-locator#locator-press)). Use `{{` to type a
+     * literal brace character. Defaults to `false`.
+     */
+    namedKeys?: boolean;
 
     /**
      * This option has no effect.
@@ -15394,6 +15414,32 @@ export interface BrowserType<Unused = {}> {
    * @param options
    */
   connectOverCDP(options: ConnectOverCDPOptions & { wsEndpoint?: string }): Promise<Browser>;
+  /**
+   * This method attaches Playwright to an existing browser instance using the Chrome DevTools Protocol.
+   *
+   * The default browser context is accessible via
+   * [browser.contexts()](https://playwright.dev/docs/api/class-browser#browser-contexts).
+   *
+   * **NOTE** Connecting over the Chrome DevTools Protocol is only supported for Chromium-based browsers.
+   *
+   * **NOTE** This connection is significantly lower fidelity than the Playwright protocol connection via
+   * [browserType.connect(endpoint[, options])](https://playwright.dev/docs/api/class-browsertype#browser-type-connect).
+   * If you are experiencing issues or attempting to use advanced functionality, you probably want to use
+   * [browserType.connect(endpoint[, options])](https://playwright.dev/docs/api/class-browsertype#browser-type-connect).
+   *
+   * **Usage**
+   *
+   * ```js
+   * const browser = await playwright.chromium.connectOverCDP('http://localhost:9222');
+   * const defaultContext = browser.contexts()[0];
+   * const page = defaultContext.pages()[0];
+   * ```
+   *
+   * @param endpointURL A CDP websocket endpoint or http url to connect to. For example `http://localhost:9222/` or
+   * `ws://127.0.0.1:9222/devtools/browser/387adf4c-243f-4051-a181-46798f4a46f4`.
+   * @param options
+   */
+  connectOverCDP(transport: ConnectionTransport): Promise<Browser>;
   /**
    * This method attaches Playwright to an existing browser instance created via `BrowserType.launchServer` in Node.js.
    *
@@ -16174,6 +16220,13 @@ export interface BrowserType<Unused = {}> {
   name(): string;
 }
 
+export interface ConnectionTransport {
+  send(message: object): void;
+  close(): void;
+  onmessage?: (message: object) => void;
+  onclose?: (reason?: string) => void;
+}
+
 /**
  * The `CDPSession` instances are used to talk raw Chrome Devtools Protocol:
  * - protocol methods can be called with `session.send` method.
@@ -16627,6 +16680,12 @@ export interface Screencast {
    * @param options
    */
   showActions(options?: {
+    /**
+     * Cursor decoration shown for pointer actions. `"pointer"` (the default) renders a mouse pointer that animates from
+     * the previous action point to the next one. `"none"` disables the cursor decoration.
+     */
+    cursor?: "none"|"pointer";
+
     /**
      * How long each annotation is displayed in milliseconds. Defaults to `500`.
      */
@@ -18803,6 +18862,52 @@ export interface APIResponse {
   ok(): boolean;
 
   /**
+   * Returns SSL and other security information. Resolves to `null` for non-HTTPS responses. For redirected requests,
+   * returns the information for the last request in the redirect chain.
+   */
+  securityDetails(): Promise<null|{
+    /**
+     * Common Name component of the Issuer field. from the certificate. This should only be used for informational
+     * purposes. Optional.
+     */
+    issuer?: string;
+
+    /**
+     * The specific TLS protocol used. (e.g. `TLS 1.3`). Optional.
+     */
+    protocol?: string;
+
+    /**
+     * Common Name component of the Subject field from the certificate. This should only be used for informational
+     * purposes. Optional.
+     */
+    subjectName?: string;
+
+    /**
+     * Unix timestamp (in seconds) specifying when this cert becomes valid. Optional.
+     */
+    validFrom?: number;
+
+    /**
+     * Unix timestamp (in seconds) specifying when this cert becomes invalid. Optional.
+     */
+    validTo?: number;
+  }>;
+
+  /**
+   * Returns the IP address and port of the server. Resolves to `null` if the server address is not available. For
+   * redirected requests, returns the information for the last request in the redirect chain.
+   */
+  serverAddr(): Promise<null|{
+    /**
+     * IPv4 or IPV6 address of the server.
+     */
+    ipAddress: string;
+
+    port: number;
+  }>;
+
+  /**
    * Contains the status code of the response (e.g., 200 for a success).
    */
   status(): number;
@@ -20337,6 +20442,10 @@ export interface Keyboard {
    *
    * Sends a `keydown`, `keypress`/`input`, and `keyup` event for each character in the text.
    *
+   * When [`namedKeys`](https://playwright.dev/docs/api/class-keyboard#keyboard-type-option-named-keys) is `true`,
+   * anything inside `{}` is treated as a key name (same format as
+   * [keyboard.press(key[, options])](https://playwright.dev/docs/api/class-keyboard#keyboard-press)).
+   *
    * To press a special key, like `Control` or `ArrowDown`, use
    * [keyboard.press(key[, options])](https://playwright.dev/docs/api/class-keyboard#keyboard-press).
    *
@@ -20345,6 +20454,9 @@ export interface Keyboard {
    * ```js
    * await page.keyboard.type('Hello'); // Types instantly
    * await page.keyboard.type('World', { delay: 100 }); // Types slower, like a user
+   *
+   * // Mix text and special keys
+   * await page.keyboard.type('Hello{Enter}World', { namedKeys: true });
    * ```
    *
    * **NOTE** Modifier keys DO NOT effect `keyboard.type`. Holding down `Shift` will not type the text in upper case.
@@ -20359,6 +20471,14 @@ export interface Keyboard {
      * Time to wait between key presses in milliseconds. Defaults to 0.
      */
     delay?: number;
+
+    /**
+     * When [`namedKeys`](https://playwright.dev/docs/api/class-keyboard#keyboard-type-option-named-keys) is `true`,
+     * anything inside `{}` is treated as a key name (same format as
+     * [keyboard.press(key[, options])](https://playwright.dev/docs/api/class-keyboard#keyboard-press)). Use `{{` to type
+     * a literal brace character. Defaults to `false`.
+     */
+    namedKeys?: boolean;
   }): Promise<void>;
 
   /**
@@ -22154,6 +22274,35 @@ export interface WebStorage {
  * - Ensure that `nodeCliInspect`
  *   ([FuseV1Options.EnableNodeCliInspectArguments](https://www.electronjs.org/docs/latest/tutorial/fuses#nodecliinspect))
  *   fuse is **not** set to `false`.
+ *
+ * **Mocking native dialogs:**
+ *
+ * Playwright does not intercept the native Electron [dialog](https://www.electronjs.org/docs/latest/api/dialog) API
+ * (`dialog.showOpenDialog`, `dialog.showSaveDialog`, `dialog.showMessageBox`, etc.) because those calls happen in the
+ * Electron main process and go straight to OS APIs. Use
+ * [electronApplication.evaluate(pageFunction[, arg])](https://playwright.dev/docs/api/class-electronapplication#electron-application-evaluate)
+ * to replace the relevant methods in the main process so tests run deterministically without any OS-level UI:
+ *
+ * ```js
+ * // Stub the open dialog to always return a fixed path.
+ * await electronApp.evaluate(({ dialog }, filePaths) => {
+ *   dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths });
+ * }, ['/path/to/file.txt']);
+ *
+ * // Stub the save dialog.
+ * await electronApp.evaluate(({ dialog }, filePath) => {
+ *   dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath });
+ * }, '/path/to/saved.txt');
+ *
+ * // Stub showMessageBox to click the first button.
+ * await electronApp.evaluate(({ dialog }) => {
+ *   dialog.showMessageBox = () => Promise.resolve({ response: 0, checkboxChecked: false });
+ * });
+ * ```
+ *
+ * The replacement persists until the application is closed. Synchronous variants (`showOpenDialogSync`,
+ * `showSaveDialogSync`, `showMessageBoxSync`) can be stubbed the same way — just return the value directly instead of
+ * a `Promise`.
  */
 export interface Electron {
   /**
@@ -24680,6 +24829,26 @@ type Devices = {
   "iPhone 15 Pro landscape": DeviceDescriptor;
   "iPhone 15 Pro Max": DeviceDescriptor;
   "iPhone 15 Pro Max landscape": DeviceDescriptor;
+  "iPhone 16": DeviceDescriptor;
+  "iPhone 16 landscape": DeviceDescriptor;
+  "iPhone 16 Plus": DeviceDescriptor;
+  "iPhone 16 Plus landscape": DeviceDescriptor;
+  "iPhone 16 Pro": DeviceDescriptor;
+  "iPhone 16 Pro landscape": DeviceDescriptor;
+  "iPhone 16 Pro Max": DeviceDescriptor;
+  "iPhone 16 Pro Max landscape": DeviceDescriptor;
+  "iPhone 16e": DeviceDescriptor;
+  "iPhone 16e landscape": DeviceDescriptor;
+  "iPhone 17": DeviceDescriptor;
+  "iPhone 17 landscape": DeviceDescriptor;
+  "iPhone Air": DeviceDescriptor;
+  "iPhone Air landscape": DeviceDescriptor;
+  "iPhone 17 Pro": DeviceDescriptor;
+  "iPhone 17 Pro landscape": DeviceDescriptor;
+  "iPhone 17 Pro Max": DeviceDescriptor;
+  "iPhone 17 Pro Max landscape": DeviceDescriptor;
+  "iPhone 17e": DeviceDescriptor;
+  "iPhone 17e landscape": DeviceDescriptor;
   "Kindle Fire HDX": DeviceDescriptor;
   "Kindle Fire HDX landscape": DeviceDescriptor;
   "LG Optimus L70": DeviceDescriptor;
@@ -24718,8 +24887,36 @@ type Devices = {
   "Pixel 4a (5G) landscape": DeviceDescriptor;
   "Pixel 5": DeviceDescriptor;
   "Pixel 5 landscape": DeviceDescriptor;
+  "Pixel 6": DeviceDescriptor;
+  "Pixel 6 landscape": DeviceDescriptor;
+  "Pixel 6 Pro": DeviceDescriptor;
+  "Pixel 6 Pro landscape": DeviceDescriptor;
+  "Pixel 6a": DeviceDescriptor;
+  "Pixel 6a landscape": DeviceDescriptor;
   "Pixel 7": DeviceDescriptor;
   "Pixel 7 landscape": DeviceDescriptor;
+  "Pixel 7 Pro": DeviceDescriptor;
+  "Pixel 7 Pro landscape": DeviceDescriptor;
+  "Pixel 7a": DeviceDescriptor;
+  "Pixel 7a landscape": DeviceDescriptor;
+  "Pixel 8": DeviceDescriptor;
+  "Pixel 8 landscape": DeviceDescriptor;
+  "Pixel 8 Pro": DeviceDescriptor;
+  "Pixel 8 Pro landscape": DeviceDescriptor;
+  "Pixel 8a": DeviceDescriptor;
+  "Pixel 8a landscape": DeviceDescriptor;
+  "Pixel 9": DeviceDescriptor;
+  "Pixel 9 landscape": DeviceDescriptor;
+  "Pixel 9 Pro": DeviceDescriptor;
+  "Pixel 9 Pro landscape": DeviceDescriptor;
+  "Pixel 9 Pro XL": DeviceDescriptor;
+  "Pixel 9 Pro XL landscape": DeviceDescriptor;
+  "Pixel 10": DeviceDescriptor;
+  "Pixel 10 landscape": DeviceDescriptor;
+  "Pixel 10 Pro": DeviceDescriptor;
+  "Pixel 10 Pro landscape": DeviceDescriptor;
+  "Pixel 10 Pro XL": DeviceDescriptor;
+  "Pixel 10 Pro XL landscape": DeviceDescriptor;
   "Moto G4": DeviceDescriptor;
   "Moto G4 landscape": DeviceDescriptor;
   "Desktop Chrome HiDPI": DeviceDescriptor;
