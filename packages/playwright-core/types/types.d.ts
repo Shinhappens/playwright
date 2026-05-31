@@ -121,7 +121,7 @@ export interface Page {
    * [page.evaluate(pageFunction[, arg])](https://playwright.dev/docs/api/class-page#page-evaluate):
    *
    * ```js
-   * const bodyHandle = await page.evaluate('document.body');
+   * const bodyHandle = await page.evaluateHandle('document.body');
    * const html = await page.evaluate<string, HTMLElement>(([body, suffix]) =>
    *   body.innerHTML + suffix, [bodyHandle, 'hello']
    * );
@@ -172,7 +172,7 @@ export interface Page {
    * [page.evaluate(pageFunction[, arg])](https://playwright.dev/docs/api/class-page#page-evaluate):
    *
    * ```js
-   * const bodyHandle = await page.evaluate('document.body');
+   * const bodyHandle = await page.evaluateHandle('document.body');
    * const html = await page.evaluate<string, HTMLElement>(([body, suffix]) =>
    *   body.innerHTML + suffix, [bodyHandle, 'hello']
    * );
@@ -4530,8 +4530,8 @@ export interface Page {
    * [`timeout`](https://playwright.dev/docs/api/class-page#page-tap-option-timeout), this method throws a
    * [TimeoutError](https://playwright.dev/docs/api/class-timeouterror). Passing zero timeout disables this.
    *
-   * **NOTE** [page.tap(selector[, options])](https://playwright.dev/docs/api/class-page#page-tap) the method will throw
-   * if [`hasTouch`](https://playwright.dev/docs/api/class-browser#browser-new-context-option-has-touch) option of the
+   * **NOTE** [page.tap(selector[, options])](https://playwright.dev/docs/api/class-page#page-tap) will throw if the
+   * [`hasTouch`](https://playwright.dev/docs/api/class-browser#browser-new-context-option-has-touch) option of the
    * browser context is false.
    *
    * @param selector A selector to search for an element. If there are multiple elements satisfying the selector, the first will be
@@ -5372,7 +5372,7 @@ export interface Frame {
    * [frame.evaluate(pageFunction[, arg])](https://playwright.dev/docs/api/class-frame#frame-evaluate):
    *
    * ```js
-   * const bodyHandle = await frame.evaluate('document.body');
+   * const bodyHandle = await frame.evaluateHandle('document.body');
    * const html = await frame.evaluate(([body, suffix]) =>
    *   body.innerHTML + suffix, [bodyHandle, 'hello'],
    * );
@@ -5419,7 +5419,7 @@ export interface Frame {
    * [frame.evaluate(pageFunction[, arg])](https://playwright.dev/docs/api/class-frame#frame-evaluate):
    *
    * ```js
-   * const bodyHandle = await frame.evaluate('document.body');
+   * const bodyHandle = await frame.evaluateHandle('document.body');
    * const html = await frame.evaluate(([body, suffix]) =>
    *   body.innerHTML + suffix, [bodyHandle, 'hello'],
    * );
@@ -15385,6 +15385,32 @@ export interface BrowserType<Unused = {}> {
    */
   connectOverCDP(endpointURL: string, options?: ConnectOverCDPOptions): Promise<Browser>;
   /**
+   * This method attaches Playwright to an existing browser instance using the Chrome DevTools Protocol.
+   *
+   * The default browser context is accessible via
+   * [browser.contexts()](https://playwright.dev/docs/api/class-browser#browser-contexts).
+   *
+   * **NOTE** Connecting over the Chrome DevTools Protocol is only supported for Chromium-based browsers.
+   *
+   * **NOTE** This connection is significantly lower fidelity than the Playwright protocol connection via
+   * [browserType.connect(endpoint[, options])](https://playwright.dev/docs/api/class-browsertype#browser-type-connect).
+   * If you are experiencing issues or attempting to use advanced functionality, you probably want to use
+   * [browserType.connect(endpoint[, options])](https://playwright.dev/docs/api/class-browsertype#browser-type-connect).
+   *
+   * **Usage**
+   *
+   * ```js
+   * const browser = await playwright.chromium.connectOverCDP('http://localhost:9222');
+   * const defaultContext = browser.contexts()[0];
+   * const page = defaultContext.pages()[0];
+   * ```
+   *
+   * @param endpointURL A CDP websocket endpoint or http url to connect to. For example `http://localhost:9222/` or
+   * `ws://127.0.0.1:9222/devtools/browser/387adf4c-243f-4051-a181-46798f4a46f4`.
+   * @param options
+   */
+  connectOverCDP(transport: ConnectOverCDPTransport, options?: ConnectOverCDPOptions): Promise<Browser>;
+  /**
    * Option `wsEndpoint` is deprecated. Instead use `endpointURL`.
    * @deprecated
    */
@@ -15414,32 +15440,7 @@ export interface BrowserType<Unused = {}> {
    * @param options
    */
   connectOverCDP(options: ConnectOverCDPOptions & { wsEndpoint?: string }): Promise<Browser>;
-  /**
-   * This method attaches Playwright to an existing browser instance using the Chrome DevTools Protocol.
-   *
-   * The default browser context is accessible via
-   * [browser.contexts()](https://playwright.dev/docs/api/class-browser#browser-contexts).
-   *
-   * **NOTE** Connecting over the Chrome DevTools Protocol is only supported for Chromium-based browsers.
-   *
-   * **NOTE** This connection is significantly lower fidelity than the Playwright protocol connection via
-   * [browserType.connect(endpoint[, options])](https://playwright.dev/docs/api/class-browsertype#browser-type-connect).
-   * If you are experiencing issues or attempting to use advanced functionality, you probably want to use
-   * [browserType.connect(endpoint[, options])](https://playwright.dev/docs/api/class-browsertype#browser-type-connect).
-   *
-   * **Usage**
-   *
-   * ```js
-   * const browser = await playwright.chromium.connectOverCDP('http://localhost:9222');
-   * const defaultContext = browser.contexts()[0];
-   * const page = defaultContext.pages()[0];
-   * ```
-   *
-   * @param endpointURL A CDP websocket endpoint or http url to connect to. For example `http://localhost:9222/` or
-   * `ws://127.0.0.1:9222/devtools/browser/387adf4c-243f-4051-a181-46798f4a46f4`.
-   * @param options
-   */
-  connectOverCDP(transport: ConnectionTransport): Promise<Browser>;
+
   /**
    * This method attaches Playwright to an existing browser instance created via `BrowserType.launchServer` in Node.js.
    *
@@ -16220,7 +16221,8 @@ export interface BrowserType<Unused = {}> {
   name(): string;
 }
 
-export interface ConnectionTransport {
+export interface ConnectOverCDPTransport {
+  open?(): void;
   send(message: object): void;
   close(): void;
   onmessage?: (message: object) => void;
@@ -21581,8 +21583,8 @@ export interface Touchscreen {
    * Dispatches a `touchstart` and `touchend` event with a single touch at the position
    * ([`x`](https://playwright.dev/docs/api/class-touchscreen#touchscreen-tap-option-x),[`y`](https://playwright.dev/docs/api/class-touchscreen#touchscreen-tap-option-y)).
    *
-   * **NOTE** [page.tap(selector[, options])](https://playwright.dev/docs/api/class-page#page-tap) the method will throw
-   * if [`hasTouch`](https://playwright.dev/docs/api/class-browser#browser-new-context-option-has-touch) option of the
+   * **NOTE** [touchscreen.tap(x, y)](https://playwright.dev/docs/api/class-touchscreen#touchscreen-tap) will throw if
+   * the [`hasTouch`](https://playwright.dev/docs/api/class-browser#browser-new-context-option-has-touch) option of the
    * browser context is false.
    *
    * @param x X coordinate relative to the main frame's viewport in CSS pixels.
@@ -24759,6 +24761,22 @@ type Devices = {
   "Galaxy Tab S4 landscape": DeviceDescriptor;
   "Galaxy Tab S9": DeviceDescriptor;
   "Galaxy Tab S9 landscape": DeviceDescriptor;
+  "Galaxy Z Fold 6": DeviceDescriptor;
+  "Galaxy Z Fold 6 landscape": DeviceDescriptor;
+  "Galaxy Z Fold 6 Cover": DeviceDescriptor;
+  "Galaxy Z Fold 6 Cover landscape": DeviceDescriptor;
+  "Galaxy Z Fold 7": DeviceDescriptor;
+  "Galaxy Z Fold 7 landscape": DeviceDescriptor;
+  "Galaxy Z Fold 7 Cover": DeviceDescriptor;
+  "Galaxy Z Fold 7 Cover landscape": DeviceDescriptor;
+  "Galaxy Z Flip 6": DeviceDescriptor;
+  "Galaxy Z Flip 6 landscape": DeviceDescriptor;
+  "Galaxy Z Flip 6 Cover": DeviceDescriptor;
+  "Galaxy Z Flip 6 Cover landscape": DeviceDescriptor;
+  "Galaxy Z Flip 7": DeviceDescriptor;
+  "Galaxy Z Flip 7 landscape": DeviceDescriptor;
+  "Galaxy Z Flip 7 Cover": DeviceDescriptor;
+  "Galaxy Z Flip 7 Cover landscape": DeviceDescriptor;
   "iPad (gen 5)": DeviceDescriptor;
   "iPad (gen 5) landscape": DeviceDescriptor;
   "iPad (gen 6)": DeviceDescriptor;

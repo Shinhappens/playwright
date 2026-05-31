@@ -211,12 +211,13 @@ export interface Locator {
 
 export interface BrowserType<Unused = {}> {
   connectOverCDP(endpointURL: string, options?: ConnectOverCDPOptions): Promise<Browser>;
+  connectOverCDP(transport: ConnectOverCDPTransport, options?: ConnectOverCDPOptions): Promise<Browser>;
   /**
    * Option `wsEndpoint` is deprecated. Instead use `endpointURL`.
    * @deprecated
    */
   connectOverCDP(options: ConnectOverCDPOptions & { wsEndpoint?: string }): Promise<Browser>;
-  connectOverCDP(transport: ConnectionTransport): Promise<Browser>;
+
   connect(wsEndpoint: string, options?: ConnectOptions): Promise<Browser>;
   /**
    * wsEndpoint in options is deprecated. Instead use `wsEndpoint`.
@@ -227,7 +228,8 @@ export interface BrowserType<Unused = {}> {
   connect(options: ConnectOptions & { wsEndpoint?: string }): Promise<Browser>;
 }
 
-export interface ConnectionTransport {
+export interface ConnectOverCDPTransport {
+  open?(): void;
   send(message: object): void;
   close(): void;
   onmessage?: (message: object) => void;
