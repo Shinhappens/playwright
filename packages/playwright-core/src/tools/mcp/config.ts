@@ -334,7 +334,6 @@ function configFromCLIOptions(cliOptions: CLIOptions): Config & { configFile?: s
       initPage: cliOptions.initPage,
       initScript: cliOptions.initScript,
       remoteEndpoint: cliOptions.endpoint,
-      remoteHeaders: cliOptions.remoteHeader,
     },
     extension: cliOptions.extension,
     server: {
@@ -365,6 +364,11 @@ function configFromCLIOptions(cliOptions: CLIOptions): Config & { configFile?: s
       navigation: cliOptions.timeoutNavigation,
     },
   };
+
+  // `remoteHeaders` is for back-compat, assign it here so it survives config merging.
+  if (cliOptions.remoteHeader)
+    // eslint-disable-next-line no-restricted-syntax
+    (config.browser as any).remoteHeaders = cliOptions.remoteHeader;
 
   return { ...config, configFile: cliOptions.config };
 }

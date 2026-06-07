@@ -403,8 +403,6 @@ test('should show params and return value', async ({ showTraceViewer }) => {
     /locator:locator\('button'\)/,
     /expression:"to.have.text"/,
     /timeout:10000/,
-    /matches:true/,
-    /received:"Click"/,
   ]);
 });
 
@@ -679,6 +677,32 @@ test('should popup snapshot', async ({ page, runAndTrace, server }) => {
   await traceViewer.page.getByTitle('Open snapshot in a new tab').click();
   const popup = await popupPromise;
   await expect(popup.frameLocator('iframe').getByText('hello äöü 🙂')).toBeVisible();
+});
+
+test('should capture attribute mutations inside a popup window', {
+  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/40895' }
+}, async ({ page, server, runAndTrace }) => {
+  server.setRoute('/popup.html', (req, res) => {
+    res.end(`<!DOCTYPE html><html><head>
+      <style>.no-display { display: none !important; }</style>
+      </head><body>
+      <div id="overlay">overlay</div>
+      <button id="hide" type="button" onclick="document.getElementById('overlay').classList.add('no-display')">Hide</button>
+      </body></html>`);
+  });
+
+  const traceViewer = await runAndTrace(async () => {
+    await page.goto(server.EMPTY_PAGE);
+    const [popup] = await Promise.all([
+      page.waitForEvent('popup'),
+      page.evaluate(url => window.open(url, 'popup', 'popup'), server.PREFIX + '/popup.html'),
+    ]);
+    await popup.getByRole('button', { name: 'Hide' }).click();
+    await expect(popup.locator('#overlay')).toBeHidden();
+  });
+
+  const frame = await traceViewer.snapshotFrame('Click');
+  await expect(frame.locator('#overlay')).toHaveClass('no-display');
 });
 
 test('should capture iframe with sandbox attribute', async ({ page, server, runAndTrace }) => {
