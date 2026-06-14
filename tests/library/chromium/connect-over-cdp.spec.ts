@@ -113,7 +113,6 @@ test('should connectOverCDP and manage downloads in default context', async ({ b
   try {
     const browser = await browserType.connectOverCDP({
       endpointURL: `http://127.0.0.1:${port}/`,
-      isLocal: true,
     });
     const page = await browser.contexts()[0].newPage();
     await page.setContent(`<a href="${server.PREFIX}/downloadWithFilename">download</a>`);
@@ -130,40 +129,6 @@ test('should connectOverCDP and manage downloads in default context', async ({ b
     await download.saveAs(userPath);
     expect(fs.existsSync(userPath)).toBeTruthy();
     expect(fs.readFileSync(userPath).toString()).toBe('Hello world');
-  } finally {
-    await browserServer.close();
-  }
-});
-
-test('should give a clear error for downloads when browser is not co-located with the server', async ({ browserType, server }, testInfo) => {
-  test.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/41060' });
-  server.setRoute('/downloadWithFilename', (req, res) => {
-    res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Disposition', 'attachment; filename=file.txt');
-    res.end(`Hello world`);
-  });
-
-  const port = 9339 + testInfo.workerIndex;
-  const browserServer = await browserType.launch({
-    args: ['--remote-debugging-port=' + port]
-  });
-
-  try {
-    const browser = await browserType.connectOverCDP({
-      endpointURL: `http://127.0.0.1:${port}/`,
-    });
-    const page = await browser.contexts()[0].newPage();
-    await page.setContent(`<a href="${server.PREFIX}/downloadWithFilename">download</a>`);
-
-    const [download] = await Promise.all([
-      page.waitForEvent('download'),
-      page.click('a')
-    ]);
-
-    const saveError = await download.saveAs(testInfo.outputPath('download.txt')).catch(e => e);
-    expect(saveError.message).toContain('the browser is running on a different host');
-    const pathError = await download.path().catch(e => e);
-    expect(pathError.message).toContain('the browser is running on a different host');
   } finally {
     await browserServer.close();
   }
@@ -555,9 +520,8 @@ test('should be able to connect via localhost', async ({ browserType }, testInfo
   }
 });
 
-test('emulate media should not be affected by second connectOverCDP', async ({ browserType }, testInfo) => {
+test('emulate media should not be affected by second connectOverCDP with noDefaults', async ({ browserType }, testInfo) => {
   test.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/24109' });
-  test.fixme();
   const port = 9339 + testInfo.workerIndex;
   const browserServer = await browserType.launch({
     args: ['--remote-debugging-port=' + port]
@@ -572,7 +536,7 @@ test('emulate media should not be affected by second connectOverCDP', async ({ b
     const page1 = await context1.newPage();
     await page1.emulateMedia({ media: 'print' });
     expect(await isPrint(page1)).toBe(true);
-    const browser2 = await browserType.connectOverCDP(`http://localhost:${port}`);
+    const browser2 = await browserType.connectOverCDP(`http://localhost:${port}`, { noDefaults: true });
     expect(await isPrint(page1)).toBe(true);
     await Promise.all([
       browser1.close(),
