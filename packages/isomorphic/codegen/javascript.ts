@@ -16,7 +16,7 @@
 
 import { asLocator } from '../locatorGenerators';
 import { escapeWithQuotes, formatObject, formatObjectOrVoid } from '../stringUtils';
-import { sanitizeDeviceOptions, toClickOptionsForSourceCode, toKeyboardModifiers, toSignalMap } from './language';
+import { expectSignalAction, sanitizeDeviceOptions, toClickOptionsForSourceCode, toKeyboardModifiers, toSignalMap } from './language';
 import { deviceDescriptors } from '../deviceDescriptors';
 
 import type { Language, LanguageGenerator, LanguageGeneratorOptions } from './types';
@@ -36,7 +36,7 @@ export class JavaScriptLanguageGenerator implements LanguageGenerator {
     this._isTest = isTest;
   }
 
-  generateAction(actionInContext: actions.ActionInContext): string {
+  generateAction(actionInContext: actions.ActionInContext, options: LanguageGeneratorOptions): string {
     const action = actionInContext.action;
     if (this._isTest && (action.name === 'openPage' || action.name === 'closePage'))
       return '';
@@ -51,8 +51,7 @@ export class JavaScriptLanguageGenerator implements LanguageGenerator {
       return formatter.format();
     }
 
-    const locators = actionInContext.frame.framePath.map(selector => `.${this._asLocator(selector)}.contentFrame()`);
-    const subject = `${pageAlias}${locators.join('')}`;
+    const subject = pageAlias;
     const signals = toSignalMap(action);
 
     if (signals.dialog) {
@@ -67,12 +66,14 @@ export class JavaScriptLanguageGenerator implements LanguageGenerator {
     if (signals.download)
       formatter.add(`const download${signals.download.downloadAlias}Promise = ${pageAlias}.waitForEvent('download');`);
 
-    formatter.add(wrapWithStep(actionInContext.description, this._generateActionCall(subject, actionInContext)));
+    formatter.add(this._generateActionCall(subject, actionInContext));
 
     if (signals.popup)
       formatter.add(`const ${signals.popup.popupAlias} = await ${signals.popup.popupAlias}Promise;`);
     if (signals.download)
       formatter.add(`const download${signals.download.downloadAlias} = await download${signals.download.downloadAlias}Promise;`);
+    if (options.generateExpectSignal && signals.expect)
+      formatter.add(this.generateAction(expectSignalAction(actionInContext, signals.expect), options));
 
     return formatter.format();
   }
@@ -254,12 +255,6 @@ export class JavaScriptFormatter {
 
 function quote(text: string) {
   return escapeWithQuotes(text, '\'');
-}
-
-function wrapWithStep(description: string | undefined, body: string) {
-  return description ? `await test.step(\`${description}\`, async () => {
-${body}
-});` : body;
 }
 
 export function quoteMultiline(text: string, indent = '  ') {
