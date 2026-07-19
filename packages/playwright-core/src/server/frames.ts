@@ -16,7 +16,6 @@
  */
 
 import yaml from 'yaml';
-import { assertionAbortedMessage } from '@isomorphic/abortSignal';
 import { parseAriaSnapshotUnsafe } from '@isomorphic/ariaSnapshot';
 import { isInvalidSelectorError } from '@isomorphic/selectorParser';
 import { ManualPromise } from '@isomorphic/manualPromise';
@@ -29,7 +28,7 @@ import { makeWaitForNextTask } from '@utils/task';
 import { createGuid } from '@utils/crypto';
 import { BrowserContext } from './browserContext';
 import * as dom from './dom';
-import { TimeoutError, AbortError, isTargetClosedError } from './errors';
+import { TimeoutError, isTargetClosedError } from './errors';
 import { prepareFilesForUpload } from './fileUploadUtils';
 import { FrameSelectors } from './frameSelectors';
 import { helper } from './helper';
@@ -433,29 +432,30 @@ export class FrameManager {
     this._webSockets.set(requestId, ws);
   }
 
-  onWebSocketRequest(requestId: string, headers: types.HeadersArray, wallTimeMs?: number) {
+  onWebSocketRequest(requestId: string, requestData?: { headers: types.HeadersArray, wallTimeMs?: number }) {
     const ws = this._webSockets.get(requestId);
     if (!ws)
       return;
 
-    ws.setWallTimeMs(wallTimeMs);
+    ws.setWallTimeMs(requestData?.wallTimeMs);
 
     if (ws.markAsNotified()) {
       this._page.emit(Page.Events.WebSocket, ws);
       this._page.browserContext.emit(BrowserContext.Events.WebSocket, ws, this._page);
     }
 
-    ws.requestSent(headers);
+    if (requestData)
+      ws.requestSent(requestData.headers);
   }
 
-  onWebSocketResponse(requestId: string, status: number, statusText: string, headers: types.HeadersArray) {
+  onWebSocketResponse(requestId: string, responseData: { status: number, statusText: string, headers: types.HeadersArray }) {
     const ws = this._webSockets.get(requestId);
     if (!ws)
       return;
 
-    ws.responseReceived(status, statusText, headers);
-    if (status >= 400)
-      ws.error(`${statusText}: ${status}`);
+    ws.responseReceived(responseData.status, responseData.statusText, responseData.headers);
+    if (responseData.status >= 400)
+      ws.error(`${responseData.statusText}: ${responseData.status}`);
   }
 
   onWebSocketFrameSent(requestId: string, opcode: number, data: string, wallTimeMs: number) {
@@ -1545,8 +1545,6 @@ export class Frame extends SdkObject<FrameEventMap> {
         progress.log(e.message);
       if (e instanceof TimeoutError)
         details.timedOut = true;
-      if (e instanceof AbortError)
-        details.customErrorMessage = assertionAbortedMessage(e.cause);
       throw new ExpectError(details);
     }
   }

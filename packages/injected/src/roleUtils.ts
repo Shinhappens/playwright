@@ -970,7 +970,7 @@ function getTextAlternativeInternal(element: Element, options: AccessibleNameOpt
   }
 
   // step 2i.
-  if (!['presentation', 'none'].includes(role) || tagName === 'IFRAME') {
+  if (!['presentation', 'none'].includes(role) || tagName === 'IFRAME' || tagName === 'FRAME') {
     options.visitedElements.add(element);
     const title = element.getAttribute('title') || '';
     if (trimFlatString(title))
@@ -1177,12 +1177,6 @@ function hasExplicitAriaDisabled(element: Element | undefined, isAncestor = fals
     return hasExplicitAriaDisabled(parentElementOrShadowHost(element), true);
   }
   return false;
-}
-
-export function getAriaBusy(element: Element): boolean {
-  // https://www.w3.org/TR/wai-aria-1.2/#aria-busy
-  // aria-busy is a global state with a default value of "false".
-  return getAriaBoolean(element.getAttribute('aria-busy')) === true;
 }
 
 function getAccessibleNameFromAssociatedLabels(labels: Iterable<HTMLLabelElement>, options: AccessibleNameOptions): CompositeString {

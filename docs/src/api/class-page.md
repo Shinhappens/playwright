@@ -1587,6 +1587,9 @@ await bodyHandle.DisposeAsync();
 
 Optional argument to pass to [`param: expression`].
 
+### option: Page.evaluate.exposeFunctions = %%-js-evaluate-expose-functions-%%
+* since: v1.62
+
 ## async method: Page.evaluateHandle
 * since: v1.8
 - returns: <[JSHandle]>
@@ -1695,6 +1698,9 @@ await resultHandle.DisposeAsync();
 - `arg` ?<[EvaluationArgument]>
 
 Optional argument to pass to [`param: expression`].
+
+### option: Page.evaluateHandle.exposeFunctions = %%-js-evaluate-expose-functions-%%
+* since: v1.62
 
 ## async method: Page.exposeBinding
 * since: v1.8
@@ -2309,8 +2315,6 @@ Attribute name to get the value for.
 ### option: Page.getByRole.exact = %%-locator-get-by-role-option-exact-%%
 
 ### option: Page.getByRole.description = %%-locator-get-by-role-option-description-%%
-
-### option: Page.getByRole.busy = %%-locator-get-by-role-option-busy-%%
 
 ## method: Page.getByTestId
 * since: v1.27

@@ -27,9 +27,10 @@ import { TargetClosedError, isTargetClosedError } from './errors';
 import { RawHeaders } from './network';
 import { Tracing } from './tracing';
 import { mkdirIfNeeded } from './fileUtils';
-import { TimeoutSettings } from './timeoutSettings';
+import { TimeoutSettings, kNoTimeout } from './timeoutSettings';
 
 import type { Playwright } from './playwright';
+import type { ResourceTiming } from './network';
 import type { ClientCertificate, FilePayload, Headers, RemoteAddr, SecurityDetails, SetStorageState, StorageState, TimeoutOptions } from './types';
 import type { Serializable } from '../../types/structs';
 import type * as api from '../../types/types';
@@ -79,7 +80,7 @@ export class APIRequest implements api.APIRequest {
       storageState,
       tracesDir: this._playwright._defaultLaunchOptions?.tracesDir, // We do not expose tracesDir in the API, so do not allow options to accidentally override it.
       clientCertificates: await toClientCertificatesProtocol(options.clientCertificates),
-    }, options.signal)).request);
+    }, kNoTimeout)).request);
     this._contexts.add(context);
     context._request = this;
     context._timeoutSettings.setDefaultTimeout(options.timeout ?? this._playwright._defaultContextTimeout);
@@ -114,7 +115,7 @@ export class APIRequestContext extends ChannelOwner<channels.APIRequestContextCh
     await this._instrumentation.runBeforeCloseRequestContext(this);
     await this.tracing._exportAllHars();
     try {
-      await this._channel.dispose(options, undefined);
+      await this._channel.dispose(options, kNoTimeout);
     } catch (e) {
       if (isTargetClosedError(e))
         return;
@@ -255,19 +256,18 @@ export class APIRequestContext extends ChannelOwner<channels.APIRequestContextCh
         jsonData,
         formData,
         multipartData,
-        timeout: this._timeoutSettings.timeout(options),
         failOnStatusCode: options.failOnStatusCode,
         ignoreHTTPSErrors: options.ignoreHTTPSErrors,
         maxRedirects: options.maxRedirects,
         maxRetries: options.maxRetries,
         ...fixtures
-      }, options.signal);
+      }, this._timeoutSettings.timeout(options));
       return new APIResponse(this, result.response);
     });
   }
 
   async storageState(options: { path?: string, indexedDB?: boolean } = {}): Promise<StorageState> {
-    const state = await this._channel.storageState({ indexedDB: options.indexedDB }, undefined);
+    const state = await this._channel.storageState({ indexedDB: options.indexedDB }, kNoTimeout);
     if (options.path) {
       await mkdirIfNeeded(options.path);
       await fs.promises.writeFile(options.path, JSON.stringify(state, undefined, 2), 'utf8');
@@ -351,10 +351,25 @@ export class APIResponse implements api.APIResponse {
     return this._initializer.serverAddr ?? null;
   }
 
+  timing(): ResourceTiming {
+    return {
+      startTime: -1,
+      domainLookupStart: -1,
+      domainLookupEnd: -1,
+      connectStart: -1,
+      secureConnectionStart: -1,
+      connectEnd: -1,
+      requestStart: -1,
+      responseStart: -1,
+      ...this._initializer.timing,
+      responseEnd: this._initializer.responseEndTiming ?? -1,
+    };
+  }
+
   async body(): Promise<Buffer> {
     return await this._request._wrapApiCall(async () => {
       try {
-        const result = await this._request._channel.fetchResponseBody({ fetchUid: this._fetchUid() }, undefined);
+        const result = await this._request._channel.fetchResponseBody({ fetchUid: this._fetchUid() }, kNoTimeout);
         if (result.binary === undefined)
           throw new Error('Response has been disposed');
         return result.binary;
@@ -381,7 +396,7 @@ export class APIResponse implements api.APIResponse {
   }
 
   async dispose(): Promise<void> {
-    await this._request._channel.disposeAPIResponse({ fetchUid: this._fetchUid() }, undefined);
+    await this._request._channel.disposeAPIResponse({ fetchUid: this._fetchUid() }, kNoTimeout);
   }
 
   private _inspect() {
@@ -394,7 +409,7 @@ export class APIResponse implements api.APIResponse {
   }
 
   async _fetchLog(): Promise<string[]> {
-    const { log } = await this._request._channel.fetchLog({ fetchUid: this._fetchUid() }, undefined);
+    const { log } = await this._request._channel.fetchLog({ fetchUid: this._fetchUid() }, kNoTimeout);
     return log;
   }
 }
